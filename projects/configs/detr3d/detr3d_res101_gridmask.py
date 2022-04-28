@@ -1,10 +1,10 @@
 _base_ = [
-    '../../../mmdetection3d/configs/_base_/datasets/nus-3d.py',
-    '../../../mmdetection3d/configs/_base_/default_runtime.py'
+    '../../../../mmdetection3d/configs/_base_/datasets/nus-3d.py',
+    '../../../../mmdetection3d/configs/_base_/default_runtime.py'
 ]
 
-plugin=True
-plugin_dir='projects/mmdet3d_plugin/'
+plugin = True
+plugin_dir = 'projects/mmdet3d_plugin/'
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
@@ -86,7 +86,7 @@ model = dict(
             pc_range=point_cloud_range,
             max_num=300,
             voxel_size=voxel_size,
-            num_classes=10), 
+            num_classes=10),
         positional_encoding=dict(
             type='SinePositionalEncoding',
             num_feats=128,
@@ -110,11 +110,18 @@ model = dict(
             type='HungarianAssigner3D',
             cls_cost=dict(type='FocalLossCost', weight=2.0),
             reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
-            iou_cost=dict(type='IoUCost', weight=0.0), # Fake cost. This is just to make it compatible with DETR head. 
+            iou_cost=dict(type='IoUCost', weight=0.0),  # Fake cost. This is just to make it compatible with DETR head.
             pc_range=point_cloud_range))))
 
 dataset_type = 'NuScenesDataset'
-data_root = 'data/nuscenes/'
+
+
+# data_root = '/home/master/10/cytseng/mmdetection3d/data/nuscenes/'
+# data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
+# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
+# data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
+
+data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
 file_client_args = dict(backend='disk')
 
@@ -199,11 +206,21 @@ data = dict(
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
         box_type_3d='LiDAR'),
-    val=dict(pipeline=test_pipeline, classes=class_names, modality=input_modality),
-    test=dict(pipeline=test_pipeline, classes=class_names, modality=input_modality))
+    val=dict(
+        data_root=data_root,
+        ann_file=data_root + 'nuscenes_infos_val.pkl',
+        pipeline=test_pipeline,
+        classes=class_names,
+        modality=input_modality),
+    test=dict(
+        data_root=data_root,
+        ann_file=data_root + 'nuscenes_infos_val.pkl',
+        pipeline=test_pipeline,
+        classes=class_names,
+        modality=input_modality))
 
 optimizer = dict(
-    type='AdamW', 
+    type='AdamW',
     lr=2e-4,
     paramwise_cfg=dict(
         custom_keys={
@@ -219,7 +236,7 @@ lr_config = dict(
     warmup_ratio=1.0 / 3,
     min_lr_ratio=1e-3)
 total_epochs = 24
-evaluation = dict(interval=2, pipeline=test_pipeline)
+evaluation = dict(interval=1, pipeline=test_pipeline)
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-load_from='ckpts/fcos3d.pth'
+load_from = 'ckpts/fcos3d.pth'
