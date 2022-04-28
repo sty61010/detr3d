@@ -20,6 +20,12 @@ from mmdet3d.models import build_model
 from mmdet3d.utils import collect_env, get_root_logger
 from mmdet.apis import set_random_seed
 from mmseg import __version__ as mmseg_version
+try:
+    # If mmdet version > 2.20.0, setup_multi_processes would be imported and
+    # used from mmdet instead of mmdet3d.
+    from mmdet.utils import setup_multi_processes
+except ImportError:
+    from mmdet3d.utils import setup_multi_processes
 
 
 def parse_args():
@@ -97,6 +103,10 @@ def main():
     cfg = Config.fromfile(args.config)
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
+
+    # set multi-process settings
+    setup_multi_processes(cfg)
+
     # import modules from string list.
     if cfg.get('custom_imports', None):
         from mmcv.utils import import_modules_from_strings
