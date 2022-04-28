@@ -2,7 +2,7 @@
 #SBATCH --account=MST111023
 #SBATCH --partition=gp2d
 #SBATCH --cpus-per-task=4
-#SBATCH --nodes=8
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=2
 #SBATCH --gres=gpu:2
 
