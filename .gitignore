@@ -121,6 +121,9 @@ mmdet3d/.mim
 # Pytorch
 *.pth
 
+# TWCC
+*.out
+
 # demo
 *.jpg
 *.png
