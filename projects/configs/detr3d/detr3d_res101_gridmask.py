@@ -118,10 +118,10 @@ dataset_type = 'NuScenesDataset'
 
 # data_root = '/home/master/10/cytseng/mmdetection3d/data/nuscenes/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
-data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
+# data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 
 # data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
-# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
+data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
 file_client_args = dict(backend='disk')
 
@@ -190,7 +190,7 @@ test_pipeline = [
         ])
 ]
 
-
+data_length = 500000
 data = dict(
     samples_per_gpu=1,
     workers_per_gpu=4,
@@ -205,7 +205,9 @@ data = dict(
         use_valid_flag=True,
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
-        box_type_3d='LiDAR'),
+        box_type_3d='LiDAR',
+        data_length=data_length,
+    ),
     val=dict(
         data_root=data_root,
         ann_file=data_root + 'nuscenes_infos_val.pkl',

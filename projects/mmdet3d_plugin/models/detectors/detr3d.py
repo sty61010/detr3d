@@ -60,6 +60,7 @@ class Detr3D(MVXTwoStageDetector):
         if self.with_img_neck:
             img_feats = self.img_neck(img_feats)
         img_feats_reshaped = []
+        # print(f'img_feats: {img_feats[3].size()}')
         for img_feat in img_feats:
             BN, C, H, W = img_feat.size()
             img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
@@ -153,7 +154,7 @@ class Detr3D(MVXTwoStageDetector):
                                             gt_bboxes_ignore)
         losses.update(losses_pts)
         return losses
-    
+
     def forward_test(self, img_metas, img=None, **kwargs):
         for var, name in [(img_metas, 'img_metas')]:
             if not isinstance(var, list):
@@ -177,7 +178,7 @@ class Detr3D(MVXTwoStageDetector):
             for bboxes, scores, labels in bbox_list
         ]
         return bbox_results
-    
+
     def simple_test(self, img_metas, img=None, rescale=False):
         """Test function without augmentaiton."""
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
