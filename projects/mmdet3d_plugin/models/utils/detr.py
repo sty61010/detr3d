@@ -19,7 +19,7 @@ def inverse_sigmoid(x, eps=1e-5):
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
     return torch.log(x1 / x2)
-    
+
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
 class Deformable3DDetrTransformerDecoder(TransformerLayerSequence):
@@ -64,6 +64,9 @@ class Deformable3DDetrTransformerDecoder(TransformerLayerSequence):
         output = query
         intermediate = []
         intermediate_reference_points = []
+        # print(f'reference_points: {reference_points.shape}')
+        # print(f'valid_ratios: {valid_ratios.shape}')
+
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
                 reference_points_input = reference_points[:, :, None] * \
@@ -87,7 +90,7 @@ class Deformable3DDetrTransformerDecoder(TransformerLayerSequence):
                     new_reference_points = new_reference_points.sigmoid()
                 else:
                     assert reference_points.shape[-1] == 2
-                    # This is to deal with the different output number (10). 
+                    # This is to deal with the different output number (10).
                     # new_reference_points = tmp
                     new_reference_points = tmp[
                         ..., :2] + inverse_sigmoid(reference_points)

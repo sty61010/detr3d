@@ -70,6 +70,9 @@ model = dict(
                             embed_dims=256,
                             num_heads=8,
                             dropout=0.1),
+                        # dict(
+                        #     type='MultiScaleDeformableAttention',
+                        #     embed_dims=256),
                         dict(
                             type='Detr3DCrossAtten',
                             pc_range=point_cloud_range,
@@ -118,9 +121,9 @@ dataset_type = 'NuScenesDataset'
 
 # data_root = '/home/master/10/cytseng/mmdetection3d/data/nuscenes/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
-data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
+# data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 
-# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
+data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
 # data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
 file_client_args = dict(backend='disk')
