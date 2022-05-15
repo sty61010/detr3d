@@ -21,7 +21,7 @@ class SpatialCrossAttention(BaseModule):
         self.num_points = num_points
         self.d_bound = d_bound
         self.attention = build_attention(attn_cfg)
-        self.init_weights()
+        # self.init_weights()
 
     def project_ego_to_image(self, reference_points: Tensor, lidar2img: Tensor, img_shape: Tuple[int]) -> Tuple[Tensor, Tensor]:
         """Project ego-pose coordinate to image coordinate
@@ -35,26 +35,32 @@ class SpatialCrossAttention(BaseModule):
                 Note that this is not the input shape of the frustum.
                 This is the shape with respect to the intrinsic.
         Returns:
-            uv: The projected points (u, v) of each camera with shape
-                [num_cameras, B, num_query, num_levels, 2].
+            uv: The normalized projected points (u, v) of each camera with shape
+                [num_cameras, B, num_query, num_levels, 2]. All elements is range in [0, 1],
+                top-left (0, 0), bottom-right (1, 1).
             mask: The mask of the valid projected points with shape
                 [num_cameras, B, num_query, num_levels].
         """
         assert reference_points.shape[0] == lidar2img.shape[0], f'The number in the batch dimension must be equal. reference_points: {reference_points.shape}, lidar2img: {lidar2img.shape}'
 
         lidar2img = lidar2img[:, :, :3]
-
-        # [num_cameras, batch, X, Y, num_points, 3]
-        uvd = torch.einsum('bnij,bqlj->nbqli', lidar2img, reference_points)
+        # convert to homogeneous coordinate. [batch, num_query, num_levels, 4]
+        reference_points = torch.cat([
+            reference_points,
+            reference_points.new_ones((*reference_points.shape[:-1], 1))
+        ], dim=-1)
+        # [num_cameras, batch, num_query, num_levels, 3]
+        uvd: Tensor = torch.einsum('bnij,bqlj->nbqli', lidar2img, reference_points)
         uv = uvd[..., :2] / uvd[..., -1:]
         img_H, img_W = img_shape
         # normalize to [0, 1]
-        uv /= Tensor([img_W, img_H], dtype=uvd.dtype, device=uvd.device).reshape(*uv.shape[:-1], 2)
-        mask = ~torch.isnan(uv)
-        mask &= ((uv[..., 0:1] > -1.0)
-                 & (uv[..., 0:1] < 1.0)
-                 & (uv[..., 1:2] > -1.0)
-                 & (uv[..., 1:2] < 1.0))
+        uv /= uv.new_tensor([img_W, img_H]).reshape(1, 1, 1, 1, 2)
+        # [num_cameras, batch, num_query, num_levels, 2]
+        mask = (torch.isfinite(uv)
+                & (uv[..., 0:1] >= 0.0)
+                & (uv[..., 0:1] <= 1.0)
+                & (uv[..., 1:2] >= 0.0)
+                & (uv[..., 1:2] <= 1.0))
         mask = torch.all(mask, dim=-1)
 
         return uv, mask
@@ -73,21 +79,21 @@ class SpatialCrossAttention(BaseModule):
                 `self.num_points` of reference points are sampled for each BEV position.
                 The sampling range of the z coordinate is `self.d_bound`.
         """
-        # [num_query, B, num_points, 1]
-        z = np.random.uniform(self.d_bound[0], self.d_bound[1], size=(*bev_pos.shape[:2], self.num_points, 1))
-        z = Tensor(z, dtype=bev_pos.dtype, device=bev_pos.device)
-        # [num_query, B, num_points, 2]
-        bev_pos = bev_pos.unsqueeze(2).repeat_interleave(self.num_points, dim=2)
-        assert bev_pos.shape == (*z.shape[:-1], 2)
-        # [num_query, B, num_points, 3]
+        num_query, batch, _ = bev_pos.shape
+        # [num_query*num_points, B, 1]
+        z = np.random.uniform(self.d_bound[0], self.d_bound[1], size=(num_query * self.num_points, batch, 1))
+        z = bev_pos.new_tensor(z)
+        # [num_query*num_points, B, 2]
+        bev_pos = bev_pos.repeat_interleave(self.num_points, dim=0)
+        # [num_query*num_points, B, 3]
         reference_points = torch.cat([bev_pos, z], dim=-1)
-        # [B, num_query * num_points, 3]
-        reference_points = reference_points.transpose(0, 1).flatten(1, 2)
-        # [B, num_query * num_points, num_levels, 3]
-        reference_points = reference_points.unsqueeze(3).repeat_interleave(num_levels, dim=3)
+        # [B, num_query*num_points, 3]
+        reference_points = reference_points.transpose(0, 1)
+        # [B, num_query*num_points, num_levels, 3]
+        reference_points = reference_points.unsqueeze(2).repeat_interleave(num_levels, dim=2)
         return reference_points
 
-    def expand_query(self, query: Tensor, query_pos: Tensor, query_bev_pos: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+    def expand_query(self, query: Tensor, query_pos: Optional[Tensor], query_bev_pos: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """Expand query to `self.num_points` times
 
         Args:
@@ -108,7 +114,8 @@ class SpatialCrossAttention(BaseModule):
         """
         query = query.repeat_interleave(self.num_points, dim=0)
         # TODO: Maybe add some position embedding here?
-        query_pos = query_pos.repeat_interleave(self.num_points, dim=0)
+        if query_pos is not None:
+            query_pos = query_pos.repeat_interleave(self.num_points, dim=0)
         query_bev_pos = query_bev_pos.repeat_interleave(self.num_points, dim=0)
         return query, query_pos, query_bev_pos
 
@@ -160,6 +167,7 @@ class SpatialCrossAttention(BaseModule):
                 spatial_shapes.prod(1).cumsum(0)[:-1],
             ])
 
+        assert None not in (query, value, query_bev_pos, spatial_shapes)
         assert query.shape[0] == query_bev_pos.shape[0]
         assert query.shape[1] == query_bev_pos.shape[1] == value.shape[0]
         assert spatial_shapes.shape[0] == level_start_index.shape[0]
@@ -170,6 +178,7 @@ class SpatialCrossAttention(BaseModule):
         value = value.flatten(-2).permute(1, 3, 0, 2)
 
         num_levels, _ = spatial_shapes.shape
+        query_bev_pos = query_bev_pos.float()
         # [B, num_query*num_points, num_levels, 3]
         reference_points = self.get_reference_points(query_bev_pos, num_levels)
 
@@ -210,6 +219,105 @@ class SpatialCrossAttention(BaseModule):
             attention_features[i, mask] = attn[mask]
 
         # TODO: Use weighted sum
+        # [num_query, batch]
+        num_hits = masks.sum((0, 2))
         # [num_query, batch, embed_dims]
-        attention_features = attention_features.sum((0, 2))
+        attention_features = attention_features.sum((0, 2)) / num_hits.unsqueeze(-1)
+        attention_features = torch.nan_to_num(
+            attention_features,
+            nan=0.,
+            posinf=0.,
+            neginf=0.,
+        )
         return attention_features
+
+
+if __name__ == '__main__':
+    device = torch.device('cuda:0')
+    lidar2img = torch.tensor([
+        [[[667.5999, -11.3459, -1.8519, -891.7272],
+          [38.3278, 67.5572, -559.0681, 760.1029],
+          [0.5589, 0.8291, 0.0114, -1.1843]],
+
+         [[412.9886, 506.6375, 1.8396, -668.0064],
+          [-20.6782, 71.7123, -553.2657, 870.4648],
+          [-0.3188, 0.9478, -0.0041, -0.1035]],
+
+         [[-365.1992, 355.5753, 9.6372, -12.7062],
+          [-78.5942, 2.7520, -354.6458, 559.4022],
+          [-0.9998, -0.0013, 0.0186, -0.0372]],
+
+         [[-643.1426, -139.6496, -12.1919, 556.9597],
+          [-20.3761, -62.4205, -556.1431, 853.0998],
+          [-0.3483, -0.9370, -0.0269, -0.0905]],
+
+         [[-259.5370, -605.4091, -16.6692, 100.7252],
+          [42.5486, -48.6904, -556.4778, 741.4697],
+          [0.5614, -0.8272, -0.0248, -1.1877]],
+
+         [[369.1537, -550.5783, -9.0176, -553.2021],
+          [71.9614, 7.6353, -557.7432, 728.3124],
+          [0.9998, 0.0181, -0.0075, -1.5520]]],
+
+
+        [[[-259.5004, -605.4585, -15.3986, 99.6544],
+          [41.3351, -49.3306, -556.5129, 741.5051],
+          [0.5614, -0.8272, -0.0250, -1.1854]],
+
+         [[667.6012, -10.9248, -3.3214, -886.1404],
+          [37.0460, 67.0861, -559.2112, 760.1919],
+          [0.5584, 0.8295, 0.0094, -1.1797]],
+
+         [[-643.1819, -139.5975, -10.6162, 555.6953],
+          [-21.5902, -63.1311, -556.0172, 852.9597],
+          [-0.3485, -0.9370, -0.0249, -0.0912]],
+
+         [[413.0042, 506.6281, 0.1605, -668.2244],
+          [-21.8812, 70.8614, -553.3291, 870.4777],
+          [-0.3188, 0.9478, -0.0048, -0.1033]],
+
+         [[-365.1406, 355.6276, 9.9227, -12.8987],
+          [-79.3611, 2.2571, -354.4784, 559.3275],
+          [-0.9998, -0.0012, 0.0208, -0.0378]],
+
+         [[369.3259, -550.4586, -9.2696, -550.8873],
+          [70.7297, 7.0912, -557.9079, 728.5782],
+          [0.9998, 0.0185, -0.0097, -1.5458]]]
+    ], device=device)
+    img_shape = (256, 704)
+    feat_H, feat_W = img_shape[0] // 16, img_shape[1] // 16
+    embed_dims = 8
+    bev_x, bev_y = 4, 4
+
+    cfg = dict(
+        type='SpatialCrossAttention',
+        attn_cfg=dict(
+            type='MultiScaleDeformableAttention',
+            embed_dims=embed_dims,
+        )
+    )
+    model: SpatialCrossAttention = build_attention(cfg).to(device)
+
+    batch, num_cameras, _, _ = lidar2img.shape
+    img_metas = dict(
+        lidar2img=lidar2img,
+        img_shape=[img_shape] * batch,
+    )
+    num_query = bev_x * bev_y
+
+    query = torch.rand((num_query, batch, embed_dims), device=device)
+    query_bev_pos = torch.stack(
+        torch.meshgrid(torch.arange(bev_x), torch.arange(bev_y)),
+        dim=-1
+    ).flatten(0, 1).unsqueeze(1).repeat_interleave(batch, dim=1).to(device)
+    value = torch.rand((batch, num_cameras, embed_dims, feat_H, feat_W), device=device)
+    spatial_shapes = torch.tensor([[feat_H, feat_W]], dtype=torch.long, device=device)
+    print(f'query: {query.shape}, query_bev_pos: {query_bev_pos.shape}')
+    output = model(
+        query=query,
+        value=value,
+        query_bev_pos=query_bev_pos,
+        spatial_shapes=spatial_shapes,
+        img_metas=img_metas,
+    )
+    print(output)
