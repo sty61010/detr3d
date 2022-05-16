@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -6,6 +6,38 @@ from mmcv.cnn.bricks.registry import ATTENTION
 from mmcv.cnn.bricks.transformer import build_attention
 from mmcv.runner.base_module import BaseModule
 from torch import Tensor
+
+
+def flatten_features(mlvl_features: List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
+    """Flatten multi-level features and return the flattened features,
+        spatial shapes, and level_start_index.
+
+    Args:
+        mlvl_features (list(Tensor)): List of features from different level
+            and different cameras. The i-th element has shape
+            [B, num_cameras, C, H_i, W_i].
+
+    Returns:
+        flat_features (Tensor): Flattened features from all levels with shape
+            [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C], where L is the
+            number of levels.
+        spatial_shapes (Tensor): Spatial shape of features in different levels.
+            With shape [num_levels, 2], last dimension represents (H, W).
+        level_start_index (Tensor): The start index of each level. A tensor has shape
+            [num_levels, ] and can be represented as [0, H_0*W_0, H_0*W_0+H_1*W_1, ...].
+    """
+    assert all([feat.dim() == 5 for feat in mlvl_features]), 'The shape of each element of `mlvl_features` must be [B, num_cameras, C, H_i, W_i].'
+    # [B, num_cameras, C, \sum_{i=0}^{num_levels} H_i * W_i]
+    flat_features = torch.cat([feat.flatten(-2) for feat in mlvl_features], dim=-1)
+    # [num_cameras, \sum_{i=0}^{num_levels} H_i * W_i, B, C]
+    flat_features = flat_features.permute(1, 3, 0, 2)
+
+    spatial_shapes = torch.tensor([feat.shape[-2:] for feat in mlvl_features], dtype=torch.long, device=mlvl_features[0].device)
+    level_start_index = torch.cat([
+        spatial_shapes.new_zeros((1, )),
+        spatial_shapes.prod(1).cumsum(0)[:-1]
+    ])
+    return flat_features, spatial_shapes, level_start_index
 
 
 @ATTENTION.register_module()
@@ -21,7 +53,6 @@ class SpatialCrossAttention(BaseModule):
         self.num_points = num_points
         self.d_bound = d_bound
         self.attention = build_attention(attn_cfg)
-        # self.init_weights()
 
     def project_ego_to_image(self, reference_points: Tensor, lidar2img: Tensor, img_shape: Tuple[int]) -> Tuple[Tensor, Tensor]:
         """Project ego-pose coordinate to image coordinate
@@ -140,7 +171,7 @@ class SpatialCrossAttention(BaseModule):
             key (Tensor): The key tensor with shape
                 `(num_key, bs, embed_dims)`.
             value (Tensor): The value tensor with shape
-                `(B, num_cameras, embed_dims, H, W)`.
+                `(num_cameras, num_key, bs, embed_dims)`.
             query_pos (Tensor): The positional encoding for `query`.
                 Default: None.
             query_bev_pos (Tensor): The 2D (x, y) position of each `query` with shape
@@ -169,13 +200,10 @@ class SpatialCrossAttention(BaseModule):
 
         assert None not in (query, value, query_bev_pos, spatial_shapes)
         assert query.shape[0] == query_bev_pos.shape[0]
-        assert query.shape[1] == query_bev_pos.shape[1] == value.shape[0]
+        assert query.shape[1] == query_bev_pos.shape[1] == value.shape[2]
         assert spatial_shapes.shape[0] == level_start_index.shape[0]
 
         num_query, batch, embed_dims = query.shape
-        _, num_cameras, _, _, _ = value.shape
-        # [B, num_cameras, embed_dims, H, W] -> [B, num_cameras, embed_dims, H*W] -> [num_cameras, H*W, B, embed_dims]
-        value = value.flatten(-2).permute(1, 3, 0, 2)
 
         num_levels, _ = spatial_shapes.shape
         query_bev_pos = query_bev_pos.float()
@@ -287,12 +315,14 @@ if __name__ == '__main__':
     img_shape = (256, 704)
     feat_H, feat_W = img_shape[0] // 16, img_shape[1] // 16
     embed_dims = 8
+    num_levels = 3
     bev_x, bev_y = 4, 4
 
     cfg = dict(
         type='SpatialCrossAttention',
         attn_cfg=dict(
             type='MultiScaleDeformableAttention',
+            num_levels=num_levels,
             embed_dims=embed_dims,
         )
     )
@@ -310,14 +340,20 @@ if __name__ == '__main__':
         torch.meshgrid(torch.arange(bev_x), torch.arange(bev_y)),
         dim=-1
     ).flatten(0, 1).unsqueeze(1).repeat_interleave(batch, dim=1).to(device)
-    value = torch.rand((batch, num_cameras, embed_dims, feat_H, feat_W), device=device)
-    spatial_shapes = torch.tensor([[feat_H, feat_W]], dtype=torch.long, device=device)
+    value = [
+        torch.rand((batch, num_cameras, embed_dims, feat_H >> i, feat_W >> i), device=device)
+        for i in range(num_levels)
+    ]
+    print(f'val: {[feat.shape for feat in value]}')
+    value, spatial_shapes, level_start_index = flatten_features(value)
     print(f'query: {query.shape}, query_bev_pos: {query_bev_pos.shape}')
+    print(f'flat_val: {value.shape},\nspatial_shapes: {spatial_shapes},\nlevel_start_index: {level_start_index}')
     output = model(
         query=query,
         value=value,
         query_bev_pos=query_bev_pos,
         spatial_shapes=spatial_shapes,
+        level_start_index=level_start_index,
         img_metas=img_metas,
     )
-    print(output)
+    # print(output)
