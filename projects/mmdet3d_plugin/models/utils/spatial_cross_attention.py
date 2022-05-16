@@ -49,6 +49,17 @@ class SpatialCrossAttention(BaseModule):
         attn_cfg=None,
         init_cfg=None,
     ):
+        """An attention module using multi-camera features.
+
+        Args:
+            num_points (int): The number of reference points sampled from each query.
+                Default: 4.
+            d_bound (list(int)): A list of int containing the lower and upper bound
+                of z coordinate. Default: [-3.0, 5.0].
+            attn_cfg (dict): The attention config of the attention sub-module.
+                By default, `MultiScaleDeformableAttention` is preferable.
+            init_cfg (dict): Initial config pass to the `BaseModule`. Default: None.
+        """
         super().__init__(init_cfg)
         self.num_points = num_points
         self.d_bound = d_bound
