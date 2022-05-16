@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import Linear, bias_init_with_prob
 from mmcv.runner import force_fp32
-                        
+
 from mmdet.core import (multi_apply, multi_apply, reduce_mean)
 from mmdet.models.utils.transformer import inverse_sigmoid
 from mmdet.models import HEADS
@@ -15,8 +15,8 @@ from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
 
 
 @HEADS.register_module()
-class Detr3DHead(DETRHead):
-    """Head of Detr3D. 
+class DeformableDetr3DHead(DETRHead):
+    """Head of Detr3D.
     Args:
         with_box_refine (bool): Whether to refine the reference points
             in the decoder. Defaults to False.
@@ -25,6 +25,7 @@ class Detr3DHead(DETRHead):
         transformer (obj:`ConfigDict`): ConfigDict is used for building
             the Encoder and Decoder.
     """
+
     def __init__(self,
                  *args,
                  with_box_refine=False,
@@ -46,11 +47,11 @@ class Detr3DHead(DETRHead):
             self.code_weights = code_weights
         else:
             self.code_weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
-        
+
         self.bbox_coder = build_bbox_coder(bbox_coder)
         self.pc_range = self.bbox_coder.pc_range
         self.num_cls_fcs = num_cls_fcs - 1
-        super(Detr3DHead, self).__init__(
+        super(DeformableDetr3DHead, self).__init__(
             *args, transformer=transformer, **kwargs)
         self.code_weights = nn.Parameter(torch.tensor(
             self.code_weights, requires_grad=False), requires_grad=False)
@@ -116,12 +117,30 @@ class Detr3DHead(DETRHead):
                 Shape [nb_dec, bs, num_query, 9].
         """
 
-        query_embeds = self.query_embedding.weight
         # Modified for deformable detr
-        
+        batch_size = mlvl_feats[0].size(0)
+        input_img_h, input_img_w = mlvl_feats[0].shape[-2], mlvl_feats[0].shape[-1]
+        # print(f'input_img_h: {input_img_h}, input_img_w: {input_img_w}')
+        img_masks = mlvl_feats[0].new_ones(
+            (batch_size, input_img_h, input_img_w))
+        # print(f'img_masks: {img_masks.shape}')
+
+        mlvl_masks = []
+        mlvl_positional_encodings = []
+        for feat in mlvl_feats:
+            mlvl_masks.append(
+                F.interpolate(img_masks[None],
+                              size=feat.shape[-2:]).to(torch.bool).squeeze(0))
+            mlvl_positional_encodings.append(
+                self.positional_encoding(mlvl_masks[-1]))
+
+        query_embeds = self.query_embedding.weight
+
         hs, init_reference, inter_references = self.transformer(
             mlvl_feats,
+            mlvl_masks,
             query_embeds,
+            mlvl_positional_encodings,
             reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
             img_metas=img_metas,
         )
@@ -159,7 +178,7 @@ class Detr3DHead(DETRHead):
             'all_cls_scores': outputs_classes,
             'all_bbox_preds': outputs_coords,
             'enc_cls_scores': None,
-            'enc_bbox_preds': None, 
+            'enc_bbox_preds': None,
         }
         return outs
 
@@ -216,7 +235,7 @@ class Detr3DHead(DETRHead):
 
         # DETR
         bbox_targets[pos_inds] = sampling_result.pos_gt_bboxes
-        return (labels, label_weights, bbox_targets, bbox_weights, 
+        return (labels, label_weights, bbox_targets, bbox_weights,
                 pos_inds, neg_inds)
 
     def get_targets(self,
@@ -298,7 +317,7 @@ class Detr3DHead(DETRHead):
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
         bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
         cls_reg_targets = self.get_targets(cls_scores_list, bbox_preds_list,
-                                           gt_bboxes_list, gt_labels_list, 
+                                           gt_bboxes_list, gt_labels_list,
                                            gt_bboxes_ignore_list)
         (labels_list, label_weights_list, bbox_targets_list, bbox_weights_list,
          num_total_pos, num_total_neg) = cls_reg_targets
@@ -332,12 +351,12 @@ class Detr3DHead(DETRHead):
         bbox_weights = bbox_weights * self.code_weights
 
         loss_bbox = self.loss_bbox(
-                bbox_preds[isnotnan, :10], normalized_bbox_targets[isnotnan, :10], bbox_weights[isnotnan, :10], avg_factor=num_total_pos)
+            bbox_preds[isnotnan, :10], normalized_bbox_targets[isnotnan, :10], bbox_weights[isnotnan, :10], avg_factor=num_total_pos)
 
         loss_cls = torch.nan_to_num(loss_cls)
         loss_bbox = torch.nan_to_num(loss_bbox)
         return loss_cls, loss_bbox
-    
+
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self,
              gt_bboxes_list,
@@ -346,7 +365,7 @@ class Detr3DHead(DETRHead):
              gt_bboxes_ignore=None):
         """"Loss function.
         Args:
-            
+
             gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
                 with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
             gt_labels_list (list[Tensor]): Ground truth class indices for each
@@ -394,7 +413,7 @@ class Detr3DHead(DETRHead):
 
         losses_cls, losses_bbox = multi_apply(
             self.loss_single, all_cls_scores, all_bbox_preds,
-            all_gt_bboxes_list, all_gt_labels_list, 
+            all_gt_bboxes_list, all_gt_labels_list,
             all_gt_bboxes_ignore_list)
 
         loss_dict = dict()

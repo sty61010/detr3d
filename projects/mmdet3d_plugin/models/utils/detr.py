@@ -64,8 +64,8 @@ class Deformable3DDetrTransformerDecoder(TransformerLayerSequence):
         output = query
         intermediate = []
         intermediate_reference_points = []
-        # print(f'reference_points: {reference_points.shape}')
-        # print(f'valid_ratios: {valid_ratios.shape}')
+        print(f'reference_points: {reference_points.shape}')
+        print(f'valid_ratios: {valid_ratios.shape}')
 
         for lid, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
@@ -75,6 +75,7 @@ class Deformable3DDetrTransformerDecoder(TransformerLayerSequence):
                 assert reference_points.shape[-1] == 2
                 reference_points_input = reference_points[:, :, None] * \
                     valid_ratios[:, None]
+
             output = layer(
                 output,
                 *args,
@@ -84,6 +85,7 @@ class Deformable3DDetrTransformerDecoder(TransformerLayerSequence):
 
             if reg_branches is not None:
                 tmp = reg_branches[lid](output)
+
                 if reference_points.shape[-1] == 4:
                     new_reference_points = tmp + inverse_sigmoid(
                         reference_points)

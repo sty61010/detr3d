@@ -11,6 +11,8 @@ from mmcv.cnn.bricks.transformer import (MultiScaleDeformableAttention,
 from mmcv.runner.base_module import BaseModule
 
 from mmdet.models.utils.builder import TRANSFORMER
+from torch.nn.init import normal_
+from .detr3d_transformer import Detr3DCrossAtten
 
 
 def inverse_sigmoid(x, eps=1e-5):
@@ -31,9 +33,39 @@ def inverse_sigmoid(x, eps=1e-5):
     return torch.log(x1 / x2)
 
 
+@TRANSFORMER_LAYER_SEQUENCE.register_module()
+class Detr3DTransformerEncoder(TransformerLayerSequence):
+    """TransformerEncoder of DETR3D.
+    Args:
+        post_norm_cfg (dict): Config of last normalization layer. Default：
+            `LN`. Only used when `self.pre_norm` is `True`
+    """
+
+    def __init__(self, *args, post_norm_cfg=dict(type='LN'), **kwargs):
+        super(Detr3DTransformerEncoder, self).__init__(*args, **kwargs)
+        # if post_norm_cfg is not None:
+        #     self.post_norm = build_norm_layer(
+        #         post_norm_cfg, self.embed_dims)[1] if self.pre_norm else None
+        # else:
+        #     assert not self.pre_norm, f'Use prenorm in ' \
+        #                               f'{self.__class__.__name__},' \
+        #                               f'Please specify post_norm_cfg'
+        self.post_norm = None
+
+    def forward(self, *args, **kwargs):
+        """Forward function for `TransformerCoder`.
+        Returns:
+            Tensor: forwarded results with shape [num_query, bs, embed_dims].
+        """
+        x = super(Detr3DTransformerEncoder, self).forward(*args, **kwargs)
+        # if self.post_norm is not None:
+        #     x = self.post_norm(x)
+        return x
+
+
 @TRANSFORMER.register_module()
-class Detr3DTransformer(BaseModule):
-    """Implements the Detr3D transformer.
+class DeformableDetr3DTransformer(BaseModule):
+    """Implements the Deformable Detr3D transformer.
     Args:
         as_two_stage (bool): Generate query from encoder features.
             Default: False.
@@ -47,9 +79,13 @@ class Detr3DTransformer(BaseModule):
                  num_feature_levels=4,
                  num_cams=6,
                  two_stage_num_proposals=300,
+                 encoder=None,
                  decoder=None,
-                 **kwargs):
-        super(Detr3DTransformer, self).__init__(**kwargs)
+                 grid_size=[0.512, 0.512, 2],
+                 pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+                 ** kwargs):
+        super(DeformableDetr3DTransformer, self).__init__(**kwargs)
+        # self.encoder = build_transformer_layer_sequence(encoder)
         self.decoder = build_transformer_layer_sequence(decoder)
         self.embed_dims = self.decoder.embed_dims
         self.num_feature_levels = num_feature_levels
@@ -57,8 +93,16 @@ class Detr3DTransformer(BaseModule):
         self.two_stage_num_proposals = two_stage_num_proposals
         self.init_layers()
 
+        '''Initialize grid for bev grid: [x_voxels, y_voxels, 2] 
+            (last dimesion for x, y coordinate)
+        '''
+        self.grid = self.init_grid(grid_size=grid_size, pc_range=pc_range)
+        print(f'self.grid: {self.grid.shape}')
+
     def init_layers(self):
-        """Initialize layers of the Detr3DTransformer."""
+        """Initialize layers of the DeformableDer3DTransformer."""
+        # self.level_embeds = nn.Parameter(
+        #     torch.Tensor(self.num_feature_levels, self.embed_dims))
         self.reference_points = nn.Linear(self.embed_dims, 3)
 
     def init_weights(self):
@@ -67,13 +111,40 @@ class Detr3DTransformer(BaseModule):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
         for m in self.modules():
-            if isinstance(m, MultiScaleDeformableAttention) or isinstance(m, Detr3DCrossAtten):
+            if isinstance(m, MultiScaleDeformableAttention):
+                m.init_weights()
+            if isinstance(m, SpatialCrossAttention):
                 m.init_weight()
         xavier_init(self.reference_points, distribution='uniform', bias=0.)
+        # normal_(self.level_embeds)
+
+    def init_grid(self, grid_size, pc_range):
+        """Initializes Grid Generator for frustum features
+        Args:
+            grid_size (list): Voxel shape [X, Y, Z]
+            pc_range (list): Voxelization point cloud range [X_min, Y_min, Z_min, X_max, Y_max, Z_max]
+            d_bound (list): Depth bound [depth_start, depth_end, depth_step]
+        """
+        self.grid_size = torch.tensor(grid_size)
+        pc_range = torch.tensor(pc_range).reshape(2, 3)
+        self.pc_min = pc_range[0]
+        self.pc_max = pc_range[1]
+        num_xyz_points = ((self.pc_max - self.pc_min) // self.grid_size).long()
+        # print(f'num_xyz_points: {num_xyz_points}')
+        x, y, z = [torch.linspace(pc_min, pc_max, num_points)
+                   for pc_min, pc_max, num_points, size in zip(self.pc_min, self.pc_max, num_xyz_points, self.grid_size)]
+        # [X, Y, Z, 3]
+        # self.grid = torch.stack(torch.meshgrid(x, y, z), dim=-1)
+        # [X, Y, Z, 4]
+        # self.grid = torch.cat([self.grid, torch.ones((*self.grid.shape[:3], 1))], dim=-1)
+        # # [X, Y, Z, 2]
+        return torch.stack(torch.meshgrid(x, y), dim=-1)
 
     def forward(self,
                 mlvl_feats,
+                mlvl_masks,
                 query_embed,
+                mlvl_pos_embeds,
                 reg_branches=None,
                 **kwargs):
         """Forward function for `Detr3DTransformer`.
@@ -114,12 +185,83 @@ class Detr3DTransformer(BaseModule):
                     otherwise None.
         """
         assert query_embed is not None
+
+        # Check parameters
         bs = mlvl_feats[0].size(0)
+        # print(f'bs: {bs}')
+        bev_grid = self.grid.clone()
+        bev_grid = bev_grid.unsqueeze(0).repeat(bs, 1, 1, 1)
+        bev_grid = bev_grid.permute(1, 2, 0, 3).view(-1, bs, 2)
+        # [bs, x_range, y_range, 2]
+        # print(f'bev_grid: {bev_grid.shape}')
+        # [bs, embed_dims, h, w].
+
+        # print(f'mlvl_feats[0]: {mlvl_feats[0].shape}')
+        # print(f'mlvl_masks[0]: {mlvl_masks[0].shape}')
+        # print(f'query_embed: {query_embed.shape}')
+        # print(f'mlvl_pos_embeds[0]: {mlvl_pos_embeds[0].shape}')
+        '''
+        # Operations for decoder
+        feat_flatten = []
+        mask_flatten = []
+        lvl_pos_embed_flatten = []
+        spatial_shapes = []
+        for lvl, (feat, mask, pos_embed) in enumerate(
+                zip(mlvl_feats, mlvl_masks, mlvl_pos_embeds)):
+            bs, c, h, w = feat.shape
+            spatial_shape = (h, w)
+            spatial_shapes.append(spatial_shape)
+            feat = feat.flatten(2).transpose(1, 2)
+            mask = mask.flatten(1)
+            pos_embed = pos_embed.flatten(2).transpose(1, 2)
+            lvl_pos_embed = pos_embed + self.level_embeds[lvl].view(1, 1, -1)
+            lvl_pos_embed_flatten.append(lvl_pos_embed)
+            feat_flatten.append(feat)
+            mask_flatten.append(mask)
+
+        feat_flatten = torch.cat(feat_flatten, 1)
+        mask_flatten = torch.cat(mask_flatten, 1)
+        lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)
+        spatial_shapes = torch.as_tensor(
+            spatial_shapes, dtype=torch.long, device=feat_flatten.device)
+        level_start_index = torch.cat((spatial_shapes.new_zeros(
+            (1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        valid_ratios = torch.stack(
+            [self.get_valid_ratio(m) for m in mlvl_masks], 1)
+
+        reference_points = \
+            self.get_reference_points(spatial_shapes,
+                                      valid_ratios,
+                                      device=feat.device)
+
+        feat_flatten = feat_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
+        lvl_pos_embed_flatten = lvl_pos_embed_flatten.permute(
+            1, 0, 2)  # (H*W, bs, embed_dims)
+        '''
+        # memory = self.encoder(
+        #     query=feat_flatten,
+        #     key=None,
+        #     value=None,
+        #     query_pos=lvl_pos_embed_flatten,
+        #     query_key_padding_mask=mask_flatten,
+        #     spatial_shapes=spatial_shapes,
+        #     reference_points=reference_points,
+        #     level_start_index=level_start_index,
+        #     valid_ratios=valid_ratios,
+        #     **kwargs)
+        # Modified from only decoder
         query_pos, query = torch.split(query_embed, self.embed_dims, dim=1)
+        # [num_query, bs, embed_dims]
+        # print(f'query: {query.shape}')
+        # [num_query, bs, embed_dims]
+        # print(f'query_pos: { query_pos.shape}')
+
         query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1)
         query = query.unsqueeze(0).expand(bs, -1, -1)
-        reference_points = self.reference_points(query_pos)
-        reference_points = reference_points.sigmoid()
+        reference_points = self.reference_points(query_pos).sigmoid()
+        # [bs, num_query, 3]
+        # print(f'reference_points: {reference_points[0][0]}')
+
         init_reference_out = reference_points
 
         # decoder
@@ -128,18 +270,21 @@ class Detr3DTransformer(BaseModule):
         inter_states, inter_references = self.decoder(
             query=query,
             key=None,
-            value=mlvl_feats,
+            value=None,
             query_pos=query_pos,
+            mlvl_feats=mlvl_feats,
             reference_points=reference_points,
             reg_branches=reg_branches,
             **kwargs)
+        # print(f'inter_states: {inter_states.shape}')
+        # print(f'inter_references: {inter_references.shape}')
 
         inter_references_out = inter_references
         return inter_states, init_reference_out, inter_references_out
 
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
-class Detr3DTransformerDecoder(TransformerLayerSequence):
+class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
     """Implements the decoder in DETR3D transformer.
     Args:
         return_intermediate (bool): Whether to return intermediate outputs.
@@ -148,12 +293,13 @@ class Detr3DTransformerDecoder(TransformerLayerSequence):
     """
 
     def __init__(self, *args, return_intermediate=False, **kwargs):
-        super(Detr3DTransformerDecoder, self).__init__(*args, **kwargs)
+        super(DeformableDetr3DTransformerDecoder, self).__init__(*args, **kwargs)
         self.return_intermediate = return_intermediate
 
     def forward(self,
                 query,
                 *args,
+                mlvl_feats=None,
                 reference_points=None,
                 reg_branches=None,
                 **kwargs):
@@ -183,6 +329,7 @@ class Detr3DTransformerDecoder(TransformerLayerSequence):
             output = layer(
                 output,
                 *args,
+                mlvl_feats=mlvl_feats,
                 reference_points=reference_points_input,
                 **kwargs)
             output = output.permute(1, 0, 2)
@@ -215,7 +362,7 @@ class Detr3DTransformerDecoder(TransformerLayerSequence):
 
 
 @ATTENTION.register_module()
-class Detr3DCrossAtten(BaseModule):
+class DeformableCrossAttention(BaseModule):
     """An attention module used in Detr3d. 
     Args:
         embed_dims (int): The embedding dimension of Attention.
@@ -245,7 +392,7 @@ class Detr3DCrossAtten(BaseModule):
                  norm_cfg=None,
                  init_cfg=None,
                  batch_first=False):
-        super(Detr3DCrossAtten, self).__init__(init_cfg)
+        super(DeformableCrossAttention, self).__init__(init_cfg)
         if embed_dims % num_heads != 0:
             raise ValueError(f'embed_dims must be divisible by num_heads, '
                              f'but got {embed_dims} and {num_heads}')
@@ -292,12 +439,15 @@ class Detr3DCrossAtten(BaseModule):
         )
         self.batch_first = batch_first
 
+        # self.embedding_to_points3d = nn.Linear(self.embed_dims, 3)
+
         self.init_weight()
 
     def init_weight(self):
         """Default initialization for Parameters of Module."""
         constant_init(self.attention_weights, val=0., bias=0.)
         xavier_init(self.output_proj, distribution='uniform', bias=0.)
+        # xavier_init(self.embedding_to_points3d, distribution='uniform', bias=0.)
 
     def forward(self,
                 query,
@@ -306,6 +456,7 @@ class Detr3DCrossAtten(BaseModule):
                 residual=None,
                 query_pos=None,
                 key_padding_mask=None,
+                mlvl_feats=None,
                 reference_points=None,
                 spatial_shapes=None,
                 level_start_index=None,
@@ -353,6 +504,12 @@ class Detr3DCrossAtten(BaseModule):
         if query_pos is not None:
             query = query + query_pos
 
+            # query_pos.permute(1, 0, 2)
+            # print(f'query_pos: {query_pos.shape}')
+            # reference_points = self.embedding_to_points3d(query_pos).sigmoid()
+            # reference_points = reference_points.permute(1, 0, 2)
+            # print(f'reference_points: {reference_points.shape}')
+
         # change to (bs, num_query, embed_dims)
         query = query.permute(1, 0, 2)
 
@@ -360,16 +517,29 @@ class Detr3DCrossAtten(BaseModule):
 
         attention_weights = self.attention_weights(query).view(
             bs, 1, num_query, self.num_cams, self.num_points, self.num_levels)
+        # [bs, 1, num_query, num_cams, num_points, num_levels]
+        # print(f'attention_weights: {attention_weights.shape}')
+
+        # [bs, num_query, 3]
+        # print(f'reference_points: {reference_points.shape}')
 
         reference_points_3d, output, mask = feature_sampling(
-            value, reference_points, self.pc_range, kwargs['img_metas'])
+            mlvl_feats, reference_points, self.pc_range, kwargs['img_metas'])
+        # [bs, num_query, 3]
+        # print(f'reference_points_3d: {reference_points_3d.shape}')
+
         output = torch.nan_to_num(output)
         mask = torch.nan_to_num(mask)
 
         attention_weights = attention_weights.sigmoid() * mask
+        # [bs, dim, num_query, num_cams , num_points, num_levels]
         # print(f'output: {output.shape}')
+
         output = output * attention_weights
         output = output.sum(-1).sum(-1).sum(-1)
+        # [bs, dim, num_query]
+        # print(f'output_embedding: {output.shape}')
+        # [num_query, bs, dim]
         output = output.permute(2, 0, 1)
 
         output = self.output_proj(output)
