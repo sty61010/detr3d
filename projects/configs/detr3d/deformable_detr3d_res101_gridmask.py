@@ -58,19 +58,19 @@ model = dict(
         as_two_stage=False,
         transformer=dict(
             type='DeformableDetr3DTransformer',
-            encoder=dict(
-                type='DetrTransformerEncoder',
-                num_layers=6,
-                transformerlayers=dict(
-                    type='BaseTransformerLayer',
-                    attn_cfgs=dict(
-                        type='SpatialCrossAttention',
-                        pc_range=point_cloud_range,
-                        num_points=1,
-                        embed_dims=256),
-                    feedforward_channels=1024,
-                    ffn_dropout=0.1,
-                    operation_order=('cross_attn', 'norm', 'ffn', 'norm'))),
+            # encoder=dict(
+            #     type='DetrTransformerEncoder',
+            #     num_layers=6,
+            #     transformerlayers=dict(
+            #         type='BaseTransformerLayer',
+            #         attn_cfgs=dict(
+            #             type='DeformableCrossAttention',
+            #             pc_range=point_cloud_range,
+            #             num_points=1,
+            #             embed_dims=256),
+            #         feedforward_channels=1024,
+            #         ffn_dropout=0.1,
+            #         operation_order=('cross_attn', 'norm', 'ffn', 'norm'))),
             decoder=dict(
                 type='DeformableDetr3DTransformerDecoder',
                 num_layers=6,
@@ -82,21 +82,29 @@ model = dict(
                             type='MultiheadAttention',
                             embed_dims=256,
                             num_heads=8,
-                            dropout=0.1),
-                        # dict(
-                        #     type='MultiScaleDeformableAttention',
-                        #     embed_dims=256),
+                            dropout=0.1
+                        ),
                         dict(
                             type='DeformableCrossAttention',
+                            attn_cfg=dict(
+                                type='MultiScaleDeformableAttention',
+                                # num_levels=4,
+                                # embed_dims=256,
+                            ),
                             pc_range=point_cloud_range,
-                            num_points=4,
-                            embed_dims=256)
+                            num_points=1,
+                            embed_dims=256
+                        ),
+                        # dict(
+                        #     type='Detr3DCrossAtten',
+                        #     pc_range=point_cloud_range,
+                        #     num_points=1,
+                        #     embed_dims=256),
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
                         'self_attn', 'norm',
-                        # 'cross_attn', 'norm',
                         'cross_attn', 'norm',
                         'ffn', 'norm')))),
         grid_size=[0.512, 0.512, 8],

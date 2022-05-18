@@ -7,4 +7,5 @@ __all__ = ['DGCNNAttn', 'Deformable3DDetrTransformerDecoder',
            'Detr3DTransformer', 'Detr3DTransformerDecoder', 'Detr3DCrossAtten',
            'DeformableDetr3DTransformer',
            'DeformableDetr3DTransformerDecoder',
+           'DeformableCrossAttention',
            'SpatialCrossAttention', ]

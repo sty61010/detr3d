@@ -419,5 +419,5 @@ def feature_sampling(mlvl_feats, reference_points, pc_range, img_metas):
         sampled_feat = sampled_feat.view(B, N, C, num_query, 1).permute(0, 2, 3, 1, 4)
         sampled_feats.append(sampled_feat)
     sampled_feats = torch.stack(sampled_feats, -1)
-    sampled_feats = sampled_feats.view(B, C, num_query, num_cam,  1, len(mlvl_feats))
+    sampled_feats = sampled_feats.view(B, C, num_query, num_cam, 1, len(mlvl_feats))
     return reference_points_3d, sampled_feats, mask
