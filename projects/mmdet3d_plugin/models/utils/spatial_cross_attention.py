@@ -45,7 +45,7 @@ class SpatialCrossAttention(BaseModule):
     def __init__(
         self,
         num_points=4,
-        d_bound=[-3., 5.],
+        z_bound=[-5., 3.],
         attn_cfg=None,
         init_cfg=None,
     ):
@@ -54,15 +54,15 @@ class SpatialCrossAttention(BaseModule):
         Args:
             num_points (int): The number of reference points sampled from each query.
                 Default: 4.
-            d_bound (list(int)): A list of int containing the lower and upper bound
-                of z coordinate. Default: [-3.0, 5.0].
+            z_bound (list(int)): A list of int containing the lower and upper bound
+                of z coordinate. Default: [-5.0, 3.0].
             attn_cfg (dict): The attention config of the attention sub-module.
                 By default, `MultiScaleDeformableAttention` is preferable.
             init_cfg (dict): Initial config pass to the `BaseModule`. Default: None.
         """
         super().__init__(init_cfg)
         self.num_points = num_points
-        self.d_bound = d_bound
+        self.z_bound = z_bound
         self.attention = build_attention(attn_cfg)
 
     def project_ego_to_image(self, reference_points: Tensor, lidar2img: Tensor, img_shape: Tuple[int]) -> Tuple[Tensor, Tensor]:
@@ -73,7 +73,7 @@ class SpatialCrossAttention(BaseModule):
                 with shape [B, num_query, num_levels, 3].
             lidar2img (Tensor): Transform matrix from lidar (ego-pose) coordinate to
                 image coordinate with shape [B, num_cameras, 4, 4] or [B, num_cameras, 3, 4].
-            img_shape (tuple): Image shape (height, width).
+            img_shape (tuple): Image shape (height, width, channel) or (height, width).
                 Note that this is not the input shape of the frustum.
                 This is the shape with respect to the intrinsic.
         Returns:
@@ -94,7 +94,7 @@ class SpatialCrossAttention(BaseModule):
         # [num_cameras, batch, num_query, num_levels, 3]
         uvd: Tensor = torch.einsum('bnij,bqlj->nbqli', lidar2img, reference_points)
         uv = uvd[..., :2] / uvd[..., -1:]
-        img_H, img_W = img_shape
+        img_H, img_W = img_shape[:2]
         # normalize to [0, 1]
         uv /= uv.new_tensor([img_W, img_H]).reshape(1, 1, 1, 1, 2)
         # [num_cameras, batch, num_query, num_levels, 2]
@@ -123,7 +123,7 @@ class SpatialCrossAttention(BaseModule):
         """
         num_query, batch, _ = bev_pos.shape
         # [num_query*num_points, B, 1]
-        z = np.random.uniform(self.d_bound[0], self.d_bound[1], size=(num_query * self.num_points, batch, 1))
+        z = np.random.uniform(self.z_bound[0], self.z_bound[1], size=(num_query * self.num_points, batch, 1))
         z = bev_pos.new_tensor(z)
         # [num_query*num_points, B, 2]
         bev_pos = bev_pos.repeat_interleave(self.num_points, dim=0)
@@ -221,12 +221,16 @@ class SpatialCrossAttention(BaseModule):
         # [B, num_query*num_points, num_levels, 3]
         reference_points = self.get_reference_points(query_bev_pos, num_levels)
 
+        lidar2img = query.new_tensor([img_meta['lidar2img'] for img_meta in img_metas])
+
+        # img_shape: [H, W, C]
+        img_shape = img_metas[0]['img_shape'][0]
         # reference_points: [num_cameras, B, num_query*num_points, num_levels, 2]
         # masks: [num_cameras, B, num_query*num_points, num_levels]
         reference_points, masks = self.project_ego_to_image(
             reference_points,
-            img_metas['lidar2img'],
-            img_metas['img_shape'][0]  # eliminate the batch dim
+            lidar2img,
+            img_shape
         )
         # masks: [num_cameras, B, num_query*num_points, num_levels]
         #     -> [num_cameras, num_query*num_points, B]
@@ -245,7 +249,6 @@ class SpatialCrossAttention(BaseModule):
                 query=query,
                 value=val,
                 query_pos=query_pos,
-                query_bev_pos=query_bev_pos,
                 key_padding_mask=key_padding_mask,
                 reference_points=ref_points,
                 spatial_shapes=spatial_shapes,
@@ -273,7 +276,7 @@ class SpatialCrossAttention(BaseModule):
 
 if __name__ == '__main__':
     device = torch.device('cuda:0')
-    lidar2img = torch.tensor([
+    lidar2img = np.array([
         [[[667.5999, -11.3459, -1.8519, -891.7272],
           [38.3278, 67.5572, -559.0681, 760.1029],
           [0.5589, 0.8291, 0.0114, -1.1843]],
@@ -322,8 +325,8 @@ if __name__ == '__main__':
          [[369.3259, -550.4586, -9.2696, -550.8873],
           [70.7297, 7.0912, -557.9079, 728.5782],
           [0.9998, 0.0185, -0.0097, -1.5458]]]
-    ], device=device)
-    img_shape = (256, 704)
+    ])
+    img_shape = (256, 704, 3)
     feat_H, feat_W = img_shape[0] // 16, img_shape[1] // 16
     embed_dims = 8
     num_levels = 3
@@ -340,10 +343,7 @@ if __name__ == '__main__':
     model: SpatialCrossAttention = build_attention(cfg).to(device)
 
     batch, num_cameras, _, _ = lidar2img.shape
-    img_metas = dict(
-        lidar2img=lidar2img,
-        img_shape=[img_shape] * batch,
-    )
+    img_metas = [dict(lidar2img=l2i, img_shape=[img_shape]) for l2i in lidar2img]
     num_query = bev_x * bev_y
 
     query = torch.rand((num_query, batch, embed_dims), device=device)
