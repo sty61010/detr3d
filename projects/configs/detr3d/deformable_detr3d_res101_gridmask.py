@@ -49,7 +49,7 @@ model = dict(
         num_outs=4,
         relu_before_extra_convs=True),
     pts_bbox_head=dict(
-        type='Detr3DHead',
+        type='DeformableDetr3DHead',
         num_query=900,
         num_classes=10,
         in_channels=256,
@@ -57,9 +57,22 @@ model = dict(
         with_box_refine=True,
         as_two_stage=False,
         transformer=dict(
-            type='Detr3DTransformer',
+            type='DeformableDetr3DTransformer',
+            # encoder=dict(
+            #     type='DetrTransformerEncoder',
+            #     num_layers=6,
+            #     transformerlayers=dict(
+            #         type='BaseTransformerLayer',
+            #         attn_cfgs=dict(
+            #             type='DeformableCrossAttention',
+            #             pc_range=point_cloud_range,
+            #             num_points=1,
+            #             embed_dims=256),
+            #         feedforward_channels=1024,
+            #         ffn_dropout=0.1,
+            #         operation_order=('cross_attn', 'norm', 'ffn', 'norm'))),
             decoder=dict(
-                type='Detr3DTransformerDecoder',
+                type='DeformableDetr3DTransformerDecoder',
                 num_layers=6,
                 return_intermediate=True,
                 transformerlayers=dict(
@@ -69,17 +82,33 @@ model = dict(
                             type='MultiheadAttention',
                             embed_dims=256,
                             num_heads=8,
-                            dropout=0.1),
+                            dropout=0.1
+                        ),
                         dict(
-                            type='Detr3DCrossAtten',
+                            type='DeformableCrossAttention',
+                            attn_cfg=dict(
+                                type='MultiScaleDeformableAttention',
+                                # num_levels=4,
+                                # embed_dims=256,
+                            ),
                             pc_range=point_cloud_range,
                             num_points=1,
-                            embed_dims=256)
+                            embed_dims=256
+                        ),
+                        # dict(
+                        #     type='Detr3DCrossAtten',
+                        #     pc_range=point_cloud_range,
+                        #     num_points=1,
+                        #     embed_dims=256),
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
-                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm',
-                                     'ffn', 'norm')))),
+                    operation_order=(
+                        'self_attn', 'norm',
+                        'cross_attn', 'norm',
+                        'ffn', 'norm')))),
+        grid_size=[0.512, 0.512, 8],
+        pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
         bbox_coder=dict(
             type='NMSFreeCoder',
             post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
