@@ -184,10 +184,10 @@ class DeformableDetr3DTransformer(BaseModule):
 
         # Check parameters
         bs = mlvl_feats[0].size(0)
-        bev_grid = self.grid.clone()
-        bev_grid = bev_grid.unsqueeze(0).repeat(bs, 1, 1, 1)
-        # bev_grid: [bs, x_range, y_range, 2]
-        bev_grid = bev_grid.permute(1, 2, 0, 3).view(-1, bs, 2)
+        # bev_grid = self.grid.clone()
+        # bev_grid = bev_grid.unsqueeze(0).repeat(bs, 1, 1, 1)
+        # # bev_grid: [bs, x_range, y_range, 2]
+        # bev_grid = bev_grid.permute(1, 2, 0, 3).view(-1, bs, 2)
 
         # mlvl_feats[0]: [B, num_cameras, C, H_i, W_i]
         # mlvl_masks[0]: [B, embed_dims, h, w].
@@ -278,7 +278,6 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
     def forward(self,
                 query,
                 *args,
-                mlvl_feats=None,
                 reference_points=None,
                 spatial_shapes=None,
                 level_start_index=None,
@@ -310,7 +309,6 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
             output = layer(
                 output,
                 *args,
-                mlvl_feats=mlvl_feats,
                 reference_points=reference_points_input,
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
@@ -381,8 +379,8 @@ class DeformableCrossAttention(BaseModule):
         # dim_per_head = embed_dims // num_heads
         self.norm_cfg = norm_cfg
         self.init_cfg = init_cfg
-        self.dropout = nn.Dropout(dropout)
-        self.pc_range = pc_range
+        # self.dropout = nn.Dropout(dropout)
+        self.pc_range = torch.tensor(pc_range, dtype=torch.float32)
 
         self.im2col_step = im2col_step
         self.embed_dims = embed_dims
@@ -393,7 +391,7 @@ class DeformableCrossAttention(BaseModule):
         # self.attention_weights = nn.Linear(embed_dims,
         #                                    num_cams * num_levels * num_points)
 
-        self.output_proj = nn.Linear(embed_dims, embed_dims)
+        # self.output_proj = nn.Linear(embed_dims, embed_dims)
 
         self.position_encoder = nn.Sequential(
             nn.Linear(3, self.embed_dims),
@@ -413,7 +411,7 @@ class DeformableCrossAttention(BaseModule):
     def init_weight(self):
         """Default initialization for Parameters of Module."""
         # constant_init(self.attention_weights, val=0., bias=0.)
-        xavier_init(self.output_proj, distribution='uniform', bias=0.)
+        # xavier_init(self.output_proj, distribution='uniform', bias=0.)
 
     def project_ego_to_image(self, reference_points: Tensor, lidar2img: Tensor, img_shape: Tuple[int]) -> Tuple[Tensor, Tensor]:
         """Project ego-pose coordinate to image coordinate
@@ -464,10 +462,10 @@ class DeformableCrossAttention(BaseModule):
                 residual=None,
                 query_pos=None,
                 key_padding_mask=None,
-                mlvl_feats=None,
                 reference_points=None,
                 spatial_shapes=None,
                 level_start_index=None,
+                img_metas=None,
                 **kwargs):
         """Forward Function of Detr3DCrossAtten.
         Args:
@@ -487,9 +485,6 @@ class DeformableCrossAttention(BaseModule):
                 `[B, num_query, 3]`
             key_padding_mask (Tensor): ByteTensor for `query`, with
                 shape '[bs, num_key]'
-            mlvl_feats (list(Tensor)): Input queries from
-                different level. Each element has shape
-                `[B, num_cameras, C, H_i, W_i]`
             spatial_shapes (Tensor): Spatial shape of features in
                 different level. With shape
                 `[num_levels, 2]`
@@ -547,51 +542,40 @@ class DeformableCrossAttention(BaseModule):
 
         # return self.dropout(output) + inp_residual + pos_feat
 ####
-
         num_query, batch, embed_dims = query.shape
 
         num_levels, _ = spatial_shapes.shape
         # query_bev_pos = query_bev_pos.float()
 
         # pos_feat: [num_query, B, embed_dim]
-        pos_feat = self.position_encoder(inverse_sigmoid(reference_points)).permute(1, 0, 2)
+        pos_feat = self.position_encoder(reference_points).permute(1, 0, 2)
 
-        # reference_points: [B, num_query * num_points, num_levels, 3]
-        # reference_points = self.get_reference_points(query_bev_pos, num_levels)
+        pc_min, pc_max = self.pc_range[:3].to(reference_points.device), self.pc_range[3:].to(reference_points.device)
+        reference_points = reference_points * (pc_max - pc_min) + pc_min
+        # reference_points: [B, num_query, num_levels, 3]
         reference_points = reference_points.unsqueeze(2).repeat_interleave(num_levels, dim=2)
 
-        img_metas = kwargs['img_metas']
-        lidar2img = []
-        for img_meta in img_metas:
-            lidar2img.append(img_meta['lidar2img'])
         # lidar2img: [B, num_cameras, 4, 4]
-        lidar2img = torch.from_numpy(np.asarray(lidar2img)).to(reference_points)
+        lidar2img = query.new_tensor([img_meta['lidar2img'] for img_meta in img_metas])
 
         # img_shape: [H, W, C]
         img_shape = img_metas[0]['img_shape'][0]
 
-        # reference_points: [num_cameras, B, num_query*num_points, num_levels, 2]
-        # masks: [num_cameras, B, num_query*num_points, num_levels]
+        # reference_points: [num_cameras, B, num_query, num_levels, 2]
+        # masks: [num_cameras, B, num_query, num_levels]
         reference_points, masks = self.project_ego_to_image(
             reference_points,
             lidar2img,
             img_shape,  # eliminate the batch dim
         )
 
-        # masks: [num_cameras, B, num_query*num_points, num_levels]
-        #     -> [num_cameras, num_query*num_points, B]
-        #     -> [num_cameras, num_query, num_points, B]
-        masks = masks.transpose(1, 2).any(-1).view(self.num_cams, num_query, self.num_points, batch)
+        # masks: [num_cameras, B, num_query, num_levels]
+        #     -> [num_cameras, num_query, B]
+        masks = masks.transpose(1, 2).any(-1)
 
-        # query: [num_query*num_points, B, embed_dims]
-        # query_pos: [num_query*num_points, B, embed_dims]
-        # query_bev_pos: [num_query * num_points, B, 2]
-        # query, query_pos, query_bev_pos = self.expand_query(query, query_pos, query_bev_pos)
-        query = query.repeat_interleave(self.num_points, dim=0)
-
-        attention_features = query.new_zeros((self.num_cams, num_query, self.num_points, batch, embed_dims))
+        attention_features = query.new_zeros((self.num_cams, num_query, batch, embed_dims))
         for i, (ref_points, mask, val) in enumerate(zip(reference_points, masks, value)):
-            # [num_query * num_points, B, embed_dims]
+            # [num_query, B, embed_dims]
             attn = self.attention(
                 query=query,
                 value=val,
@@ -602,22 +586,20 @@ class DeformableCrossAttention(BaseModule):
                 level_start_index=level_start_index,
                 **kwargs,
             )
-            attn = attn.view(num_query, self.num_points, batch, embed_dims)
-            # mask: [num_query, num_points, B]
+            # mask: [num_query, B]
             attention_features[i, mask] = attn[mask]
 
         # TODO: Use weighted sum
         # [num_query, batch]
-        num_hits = masks.sum((0, 2))
+        num_hits = masks.sum(0)
         # [num_query, batch, embed_dims]
-        attention_features = attention_features.sum((0, 2)) / num_hits.unsqueeze(-1)
+        attention_features = attention_features.sum(0) / num_hits.unsqueeze(-1)
         attention_features = torch.nan_to_num(
             attention_features,
             nan=0.,
             posinf=0.,
             neginf=0.,
         )
-        attention_features = self.dropout(self.output_proj(attention_features))
 
         return attention_features + inp_residual + pos_feat
 
