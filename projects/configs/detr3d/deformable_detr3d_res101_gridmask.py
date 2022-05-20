@@ -58,19 +58,19 @@ model = dict(
         as_two_stage=False,
         transformer=dict(
             type='DeformableDetr3DTransformer',
-            # encoder=dict(
-            #     type='DetrTransformerEncoder',
-            #     num_layers=6,
-            #     transformerlayers=dict(
-            #         type='BaseTransformerLayer',
-            #         attn_cfgs=dict(
-            #             type='DeformableCrossAttention',
-            #             pc_range=point_cloud_range,
-            #             num_points=1,
-            #             embed_dims=256),
-            #         feedforward_channels=1024,
-            #         ffn_dropout=0.1,
-            #         operation_order=('cross_attn', 'norm', 'ffn', 'norm'))),
+            encoder=dict(
+                type='DeformableDetr3DTransformerEncoder',
+                num_layers=6,
+                transformerlayers=dict(
+                    type='BaseTransformerLayer',
+                    attn_cfgs=dict(
+                        type='DeformableCrossAttention',
+                        pc_range=point_cloud_range,
+                        num_points=1,
+                        embed_dims=256),
+                    feedforward_channels=1024,
+                    ffn_dropout=0.1,
+                    operation_order=('cross_attn', 'norm', 'ffn', 'norm'))),
             decoder=dict(
                 type='DeformableDetr3DTransformerDecoder',
                 num_layers=6,
@@ -149,8 +149,8 @@ dataset_type = 'NuScenesDataset'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 
-data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
-# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
+# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
+data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
 file_client_args = dict(backend='disk')
 

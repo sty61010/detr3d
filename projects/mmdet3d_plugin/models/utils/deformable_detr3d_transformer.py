@@ -38,15 +38,15 @@ def inverse_sigmoid(x, eps=1e-5):
 
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
-class Detr3DTransformerEncoder(TransformerLayerSequence):
-    """TransformerEncoder of DETR3D.
+class DeformableDetr3DTransformerEncoder(TransformerLayerSequence):
+    """TransformerEncoder of DeformableDetr3D.
     Args:
         post_norm_cfg (dict): Config of last normalization layer. Default：
             `LN`. Only used when `self.pre_norm` is `True`
     """
 
     def __init__(self, *args, post_norm_cfg=dict(type='LN'), **kwargs):
-        super(Detr3DTransformerEncoder, self).__init__(*args, **kwargs)
+        super(DeformableDetr3DTransformerEncoder, self).__init__(*args, **kwargs)
         # if post_norm_cfg is not None:
         #     self.post_norm = build_norm_layer(
         #         post_norm_cfg, self.embed_dims)[1] if self.pre_norm else None
@@ -61,7 +61,7 @@ class Detr3DTransformerEncoder(TransformerLayerSequence):
         Returns:
             Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
-        x = super(Detr3DTransformerEncoder, self).forward(*args, **kwargs)
+        x = super(DeformableDetr3DTransformerEncoder, self).forward(*args, **kwargs)
         # if self.post_norm is not None:
         #     x = self.post_norm(x)
         return x
@@ -436,6 +436,17 @@ class DeformableCrossAttention(BaseModule):
             0], f'The number in the batch dimension must be equal. reference_points: {reference_points.shape}, lidar2img: {lidar2img.shape}'
 
         lidar2img = lidar2img[:, :, :3]
+
+        """ Input reference_points is fed in sigmoid and in range(0, 1).
+            Convert referencepoints back to 3D coordinate.
+        """
+        # reference_points: [batch, num_query, num_levels, 4]
+        pc_range = self.pc_range
+        reference_points = reference_points.clone()
+        reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
+        reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
+        reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
+
         # convert to homogeneous coordinate. [batch, num_query, num_levels, 4]
         reference_points = torch.cat([
             reference_points,
@@ -484,6 +495,7 @@ class DeformableCrossAttention(BaseModule):
                 `[num_query, B, embed_dims]`
 
             reference_points (Tensor): 
+                Input reference_points is fed in sigmoid and in range(0, 1).
                 `[B, num_query, 3]`
             key_padding_mask (Tensor): ByteTensor for `query`, with
                 shape '[bs, num_key]'
@@ -633,7 +645,7 @@ def feature_sampling(mlvl_feats, reference_points, pc_range, img_metas):
     reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
     reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
     reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
-    # reference_points (B, num_queries, 4)
+    # reference_points: (B, num_queries, 4)
     reference_points = torch.cat((reference_points, torch.ones_like(reference_points[..., :1])), -1)
     B, num_query = reference_points.size()[:2]
     num_cam = lidar2img.size(1)
