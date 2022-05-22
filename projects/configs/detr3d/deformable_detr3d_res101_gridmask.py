@@ -26,6 +26,8 @@ input_modality = dict(
     use_map=False,
     use_external=False)
 
+embed_dims = 256
+
 model = dict(
     type='Detr3D',
     use_grid_mask=True,
@@ -43,7 +45,7 @@ model = dict(
     img_neck=dict(
         type='FPN',
         in_channels=[256, 512, 1024, 2048],
-        out_channels=256,
+        out_channels=embed_dims,
         start_level=1,
         add_extra_convs='on_output',
         num_outs=4,
@@ -52,7 +54,7 @@ model = dict(
         type='DeformableDetr3DHead',
         num_query=900,
         num_classes=10,
-        in_channels=256,
+        in_channels=embed_dims,
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
@@ -76,37 +78,29 @@ model = dict(
                 num_layers=6,
                 return_intermediate=True,
                 transformerlayers=dict(
-                    type='DetrTransformerDecoderLayer',
+                    type='BaseTransformerLayer',
                     attn_cfgs=[
                         dict(
                             type='MultiheadAttention',
-                            embed_dims=256,
+                            embed_dims=embed_dims,
                             num_heads=8,
-                            dropout=0.1
+                            dropout=0.1,
                         ),
                         dict(
-                            type='DeformableCrossAttention',
-                            attn_cfg=dict(
-                                type='MultiScaleDeformableAttention',
-                                # num_levels=4,
-                                # embed_dims=256,
-                            ),
-                            pc_range=point_cloud_range,
-                            num_points=1,
-                            embed_dims=256
+                            type='MultiScaleDeformableAttention',
+                            num_levels=1,  # the number of levels of bev features
+                            embed_dims=embed_dims,
                         ),
-                        # dict(
-                        #     type='Detr3DCrossAtten',
-                        #     pc_range=point_cloud_range,
-                        #     num_points=1,
-                        #     embed_dims=256),
                     ],
-                    feedforward_channels=512,
-                    ffn_dropout=0.1,
+                    ffn_cfgs=dict(
+                        feedforward_channels=512,
+                        ffn_drop=0.1,
+                    ),
                     operation_order=(
                         'self_attn', 'norm',
                         'cross_attn', 'norm',
-                        'ffn', 'norm')))),
+                        'ffn', 'norm',
+                    )))),
         grid_size=[0.512, 0.512, 8],
         pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
         bbox_coder=dict(
@@ -149,8 +143,8 @@ dataset_type = 'NuScenesDataset'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 
-data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
-# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
+# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
+data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
 file_client_args = dict(backend='disk')
 
