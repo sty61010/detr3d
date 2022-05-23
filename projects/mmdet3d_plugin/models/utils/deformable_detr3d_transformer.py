@@ -20,7 +20,7 @@ from .detr3d_transformer import Detr3DCrossAtten
 from .dca import DeformableCrossAttention
 
 
-def inverse_sigmoid(x, eps=1e-5):
+def inverse_sigmoid(x: Tensor, eps: float = 1e-5):
     """Inverse function of sigmoid.
     Args:
         x (Tensor): The tensor to do the
@@ -36,6 +36,38 @@ def inverse_sigmoid(x, eps=1e-5):
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
     return torch.log(x1 / x2)
+
+
+def flatten_features(mlvl_features: List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
+    """Flatten multi-level features and return the flattened features,
+        spatial shapes, and level_start_index.
+    Args:
+        mlvl_features (list(Tensor)): List of features from different level
+            and different cameras. The i-th element has shape
+            [B, num_cameras, C, H_i, W_i].
+    Returns:
+        flat_features (Tensor): Flattened features from all levels with shape
+            [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C], where L is the
+            number of levels.
+        spatial_shapes (Tensor): Spatial shape of features in different levels.
+            With shape [num_levels, 2], last dimension represents (H, W).
+        level_start_index (Tensor): The start index of each level. A tensor has shape
+            [num_levels, ] and can be represented as [0, H_0*W_0, H_0*W_0+H_1*W_1, ...].
+    """
+    assert all([feat.dim() == 5 for feat in mlvl_features]
+               ), 'The shape of each element of `mlvl_features` must be [B, num_cameras, C, H_i, W_i].'
+    # flat_features: [B, num_cameras, C, \sum_{i=0}^{num_levels} H_i * W_i]
+    flat_features = torch.cat([feat.flatten(-2) for feat in mlvl_features], dim=-1)
+    # flat_features: [num_cameras, \sum_{i=0}^{num_levels} H_i * W_i, B, C]
+    flat_features = flat_features.permute(1, 3, 0, 2)
+
+    spatial_shapes = torch.tensor([feat.shape[-2:] for feat in mlvl_features],
+                                  dtype=torch.long, device=mlvl_features[0].device)
+    level_start_index = torch.cat([
+        spatial_shapes.new_zeros((1, )),
+        spatial_shapes.prod(1).cumsum(0)[:-1]
+    ])
+    return flat_features, spatial_shapes, level_start_index
 
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
@@ -98,7 +130,7 @@ class DeformableDetr3DTransformer(BaseModule):
         self.two_stage_num_proposals = two_stage_num_proposals
         self.init_layers()
 
-        """Initialize grid for bev grid: [x_voxels, y_voxels, 2] 
+        """Initialize grid for bev grid: [x_voxels, y_voxels, 2]
             (last dimesion for x, y coordinate)
         """
         self.grid = self.init_grid(grid_size=grid_size, pc_range=pc_range)
@@ -185,16 +217,17 @@ class DeformableDetr3DTransformer(BaseModule):
 
         # Check parameters
         bs = mlvl_feats[0].size(0)
-        # bev_grid = self.grid.clone()
-        # bev_grid = bev_grid.unsqueeze(0).repeat(bs, 1, 1, 1)
-        # # bev_grid: [bs, x_range, y_range, 2]
-        # bev_grid = bev_grid.permute(1, 2, 0, 3).view(-1, bs, 2)
+        # [x_range, y_range, 2]
+        bev_grid = self.grid.clone()
+        x_range, y_range, _ = bev_grid.shape
+        # [x_range, y_range, bs, 2] -> [x_range*y_range, bs, 2]
+        bev_grid = bev_grid.unsqueeze(2).repeat_interleave(bs).flatten(0, 1)
 
         # mlvl_feats[0]: [B, num_cameras, C, H_i, W_i]
         # mlvl_masks[0]: [B, embed_dims, h, w].
 
         # Modified from only decoder
-        # value[0]: [B, num_cameras, C, H_i, W_i]
+        # value[i]: [B, num_cameras, C, H_i, W_i]
         # spatial_shapes: [num_levels, 2]
         # level_start_index: [num_levels, ]
         value, spatial_shapes, level_start_index = flatten_features(mlvl_feats)
@@ -213,54 +246,25 @@ class DeformableDetr3DTransformer(BaseModule):
         # decoder
         query = query.permute(1, 0, 2)
         query_pos = query_pos.permute(1, 0, 2)
+        # [x_range*y_range, bs, embed_dims]
+        # TODO: get bev features from encoder and remove this line
+        bev_features = value
         # inter_states: [num_camera, B, num_query, embed_dims]
         # inter_references: [num_camera, B, num_query, 3]
         inter_states, inter_references = self.decoder(
             query=query,
             key=None,
-            value=value,
+            value=bev_features,
             query_pos=query_pos,
-            mlvl_feats=mlvl_feats,
             reference_points=reference_points,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
+            spatial_shapes=bev_features.new_tensor([[x_range, y_range]]),
+            level_start_index=bev_features.new_tensor([0, x_range * y_range]),
             reg_branches=reg_branches,
-            **kwargs)
+            **kwargs
+        )
 
         inter_references_out = inter_references
         return inter_states, init_reference_out, inter_references_out
-
-
-def flatten_features(mlvl_features: List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]:
-    """Flatten multi-level features and return the flattened features,
-        spatial shapes, and level_start_index.
-    Args:
-        mlvl_features (list(Tensor)): List of features from different level
-            and different cameras. The i-th element has shape
-            [B, num_cameras, C, H_i, W_i].
-    Returns:
-        flat_features (Tensor): Flattened features from all levels with shape
-            [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C], where L is the
-            number of levels.
-        spatial_shapes (Tensor): Spatial shape of features in different levels.
-            With shape [num_levels, 2], last dimension represents (H, W).
-        level_start_index (Tensor): The start index of each level. A tensor has shape
-            [num_levels, ] and can be represented as [0, H_0*W_0, H_0*W_0+H_1*W_1, ...].
-    """
-    assert all([feat.dim() == 5 for feat in mlvl_features]
-               ), 'The shape of each element of `mlvl_features` must be [B, num_cameras, C, H_i, W_i].'
-    # flat_features: [B, num_cameras, C, \sum_{i=0}^{num_levels} H_i * W_i]
-    flat_features = torch.cat([feat.flatten(-2) for feat in mlvl_features], dim=-1)
-    # flat_features: [num_cameras, \sum_{i=0}^{num_levels} H_i * W_i, B, C]
-    flat_features = flat_features.permute(1, 3, 0, 2)
-
-    spatial_shapes = torch.tensor([feat.shape[-2:] for feat in mlvl_features],
-                                  dtype=torch.long, device=mlvl_features[0].device)
-    level_start_index = torch.cat([
-        spatial_shapes.new_zeros((1, )),
-        spatial_shapes.prod(1).cumsum(0)[:-1]
-    ])
-    return flat_features, spatial_shapes, level_start_index
 
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
@@ -276,14 +280,16 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
         super(DeformableDetr3DTransformerDecoder, self).__init__(*args, **kwargs)
         self.return_intermediate = return_intermediate
 
-    def forward(self,
-                query,
-                *args,
-                reference_points=None,
-                spatial_shapes=None,
-                level_start_index=None,
-                reg_branches=None,
-                **kwargs):
+    def forward(
+        self,
+        query: Tensor,
+        value: Tensor,
+        reference_points: Tensor,
+        spatial_shapes: Tensor,
+        level_start_index: Tensor,
+        reg_branches: Optional[nn.Module] = None,
+        **kwargs
+    ):
         """Forward function for `DeformableDetr3DTransformerDecoder`.
         Args:
             query (Tensor): Input query with shape
@@ -309,7 +315,7 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
             reference_points_input = reference_points
             output = layer(
                 output,
-                *args,
+                value=value,
                 reference_points=reference_points_input,
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
