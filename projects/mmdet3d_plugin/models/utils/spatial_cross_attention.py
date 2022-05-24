@@ -26,13 +26,15 @@ def flatten_features(mlvl_features: List[Tensor]) -> Tuple[Tensor, Tensor, Tenso
         level_start_index (Tensor): The start index of each level. A tensor has shape
             [num_levels, ] and can be represented as [0, H_0*W_0, H_0*W_0+H_1*W_1, ...].
     """
-    assert all([feat.dim() == 5 for feat in mlvl_features]), 'The shape of each element of `mlvl_features` must be [B, num_cameras, C, H_i, W_i].'
+    assert all([feat.dim() == 5 for feat in mlvl_features]
+               ), 'The shape of each element of `mlvl_features` must be [B, num_cameras, C, H_i, W_i].'
     # [B, num_cameras, C, \sum_{i=0}^{num_levels} H_i * W_i]
     flat_features = torch.cat([feat.flatten(-2) for feat in mlvl_features], dim=-1)
     # [num_cameras, \sum_{i=0}^{num_levels} H_i * W_i, B, C]
     flat_features = flat_features.permute(1, 3, 0, 2)
 
-    spatial_shapes = torch.tensor([feat.shape[-2:] for feat in mlvl_features], dtype=torch.long, device=mlvl_features[0].device)
+    spatial_shapes = torch.tensor([feat.shape[-2:] for feat in mlvl_features],
+                                  dtype=torch.long, device=mlvl_features[0].device)
     level_start_index = torch.cat([
         spatial_shapes.new_zeros((1, )),
         spatial_shapes.prod(1).cumsum(0)[:-1]
@@ -48,6 +50,11 @@ class SpatialCrossAttention(BaseModule):
         z_bound=[-5., 3.],
         attn_cfg=None,
         init_cfg=None,
+        embed_dims=256,
+        num_heads=8,
+        num_levels=4,
+        batch_first=False,
+        norm_cfg=None,
     ):
         """An attention module using multi-camera features.
 
@@ -65,6 +72,16 @@ class SpatialCrossAttention(BaseModule):
         self.z_bound = z_bound
         self.attention = build_attention(attn_cfg)
 
+        # for Construct
+        self.norm_cfg = norm_cfg
+        self.init_cfg = init_cfg
+        self.embed_dims = embed_dims
+        self.num_levels = num_levels
+        self.num_heads = num_heads
+        self.batch_first = batch_first
+
+    # def init_weights(self):
+    #     self.attention.init_weights()
     def project_ego_to_image(self, reference_points: Tensor, lidar2img: Tensor, img_shape: Tuple[int]) -> Tuple[Tensor, Tensor]:
         """Project ego-pose coordinate to image coordinate
 
@@ -83,7 +100,8 @@ class SpatialCrossAttention(BaseModule):
             mask: The mask of the valid projected points with shape
                 [num_cameras, B, num_query, num_levels].
         """
-        assert reference_points.shape[0] == lidar2img.shape[0], f'The number in the batch dimension must be equal. reference_points: {reference_points.shape}, lidar2img: {lidar2img.shape}'
+        assert reference_points.shape[0] == lidar2img.shape[
+            0], f'The number in the batch dimension must be equal. reference_points: {reference_points.shape}, lidar2img: {lidar2img.shape}'
 
         lidar2img = lidar2img[:, :, :3]
         # convert to homogeneous coordinate. [batch, num_query, num_levels, 4]
@@ -166,6 +184,7 @@ class SpatialCrossAttention(BaseModule):
         query: Tensor,
         key=None,
         value: Tensor = None,
+        residual=None,
         query_pos: Optional[Tensor] = None,
         query_bev_pos: Tensor = None,
         key_padding_mask: Optional[Tensor] = None,
@@ -215,13 +234,13 @@ class SpatialCrossAttention(BaseModule):
         assert spatial_shapes.shape[0] == level_start_index.shape[0]
 
         num_query, batch, embed_dims = query.shape
-
+        num_cameras, _, _, _ = value.shape
         num_levels, _ = spatial_shapes.shape
         query_bev_pos = query_bev_pos.float()
         # [B, num_query*num_points, num_levels, 3]
         reference_points = self.get_reference_points(query_bev_pos, num_levels)
 
-        lidar2img = query.new_tensor([img_meta['lidar2img'] for img_meta in img_metas])
+        lidar2img = query.new_tensor([img_meta['lidar2img'] for img_meta in img_metas], device=reference_points.device)
 
         # img_shape: [H, W, C]
         img_shape = img_metas[0]['img_shape'][0]
