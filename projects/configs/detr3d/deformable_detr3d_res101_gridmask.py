@@ -60,9 +60,7 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
-
         transformer=dict(
-
             type='DeformableDetr3DTransformer',
             grid_size=grid_size,
             pc_range=point_cloud_range,
@@ -81,7 +79,11 @@ model = dict(
                     ),
                     feedforward_channels=512,
                     ffn_dropout=0.1,
-                    operation_order=('cross_attn', 'norm', 'ffn', 'norm'))),
+                    operation_order=(
+                        'cross_attn', 
+                        'norm', 
+                        'ffn', 
+                        'norm'))),
             decoder=dict(
                 type='DeformableDetr3DTransformerDecoder',
                 num_layers=6,

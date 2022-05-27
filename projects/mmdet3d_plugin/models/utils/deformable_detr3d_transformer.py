@@ -150,16 +150,27 @@ class DeformableDetr3DTransformer(BaseModule):
         """
         self.grid = self.init_grid(grid_size=grid_size, pc_range=pc_range)
         # bev_query: [x_range * y_range, C]
-        # self.bev_query = nn.Embedding(self.grid[0] * self.grid[1],
+        # self.bev_query = nn.Embedding(self.grid.shape[0] * self.grid.shape[1],
         #                               self.embed_dims)
-        self.bev_query = nn.Parameter(torch.Tensor(self.grid.shape[0] * self.grid.shape[1],
-                                                   self.embed_dims))
+        # self.bev_query = nn.Parameter(torch.Tensor(self.grid.shape[0] * self.grid.shape[1],
+        #                                            self.embed_dims))
         self.init_layers()
 
     def init_layers(self):
-        """Initialize layers of the DeformableDer3DTransformer."""
-
+        """ Initialize layers of the DeformableDer3DTransformer."""
+        
         self.reference_points = nn.Linear(self.embed_dims, 3)
+
+        """ Generate bev_query_pos to bev_qyery
+                Input:  query_bev_pos: [x_range, y_range, bs, 2] -> [x_range * y_range, bs, 2]
+                output: bev_query: [x_range * y_range, C] -> [x_range * y_range, bs, C]
+        """ 
+        self.grid_to_query = nn.Sequential(
+            nn.Linear(2, self.embed_dims),
+            nn.GELU(),
+            nn.Linear(self.embed_dims, self.embed_dims),
+            # nn.ReLU(),
+            )
 
     def init_weights(self):
         """Initialize the transformer weights."""
@@ -176,7 +187,8 @@ class DeformableDetr3DTransformer(BaseModule):
             # if isinstance(m, SpatialCrossAttention):
             #     m.init_weight()
         xavier_init(self.reference_points, distribution='uniform', bias=0.)
-        normal_(self.bev_query)
+        xavier_init(self.grid_to_query, distribution='uniform', bias=0.)
+        # normal_(self.bev_query)
 
     def init_grid(self, grid_size, pc_range):
         """Initializes Grid Generator for frustum features
@@ -242,8 +254,9 @@ class DeformableDetr3DTransformer(BaseModule):
         query_bev_pos = query_bev_pos.unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1)
 
         # bev_query: [x_range * y_range, C] -> [x_range * y_range, bs, C]
-        bev_query = self.bev_query.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
-
+        # bev_query = self.bev_query.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
+        bev_query = self.grid_to_query(query_bev_pos)
+        # print(f'bev_query: {bev_query.shape}')
         # mlvl_feats[0]: [B, num_cameras, C, H_i, W_i]
         # mlvl_masks[0]: [B, embed_dims, h, w].
 
@@ -296,7 +309,8 @@ class DeformableDetr3DTransformer(BaseModule):
             reg_branches=reg_branches,
             **kwargs
         )
-
+        # print(f'inter_states: {inter_states.shape}')
+        # print(f'inter_references: {inter_references.shape}')
         # inter_states, inter_references = self.decoder(
             # query=query,
             # key=None,
