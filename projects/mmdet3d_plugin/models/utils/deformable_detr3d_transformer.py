@@ -1,3 +1,5 @@
+import warnings
+import copy
 import numpy as np
 import torch
 from torch import Tensor
@@ -5,11 +7,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import xavier_init, constant_init
 from mmcv.cnn.bricks.registry import (ATTENTION,
+                                      TRANSFORMER_LAYER,
                                       TRANSFORMER_LAYER_SEQUENCE)
-from mmcv.cnn.bricks.transformer import (MultiScaleDeformableAttention,
+from mmcv.cnn.bricks.transformer import (BaseTransformerLayer,
+                                         MultiScaleDeformableAttention,
                                          TransformerLayerSequence,
                                          build_transformer_layer_sequence,
-                                         build_attention,
+                                         build_attention
                                          )
 from mmcv.runner.base_module import BaseModule
 
@@ -90,14 +94,16 @@ class DeformableDetr3DTransformerEncoder(TransformerLayerSequence):
         #                               f'Please specify post_norm_cfg'
         self.post_norm = None
 
-    def forward(self,             
+    def forward(self,
                 query,
                 key=None,
                 value=None,
-                query_bev_pos=None,
-                spatial_shapes=None,
-                level_start_index=None,
-                img_metas=None, 
+                # query_bev_pos=None,
+                # spatial_shapes=None,
+                # level_start_index=None,
+                img_metas=None,
+                self_attn_args=dict(),
+                cross_attn_args=dict(),
                 **kwargs):
         """Forward function for `TransformerCoder`.
         Returns:
@@ -106,10 +112,12 @@ class DeformableDetr3DTransformerEncoder(TransformerLayerSequence):
         x = super().forward(query=query,
                             key=key,
                             value=value,
-                            query_bev_pos=query_bev_pos,
-                            spatial_shapes=spatial_shapes,
-                            level_start_index=level_start_index,
+                            # query_bev_pos=query_bev_pos,
+                            # spatial_shapes=spatial_shapes,
+                            # level_start_index=level_start_index,
                             img_metas=img_metas,
+                            self_attn_args=self_attn_args,
+                            cross_attn_args=cross_attn_args,
                             **kwargs)
         # if self.post_norm is not None:
         #     x = self.post_norm(x)
@@ -158,7 +166,7 @@ class DeformableDetr3DTransformer(BaseModule):
 
     def init_layers(self):
         """Initialize layers of the DeformableDer3DTransformer."""
-
+        self.bev_reference_points = nn.Linear(self.embed_dims, 2)
         self.reference_points = nn.Linear(self.embed_dims, 3)
 
     def init_weights(self):
@@ -176,6 +184,7 @@ class DeformableDetr3DTransformer(BaseModule):
             # if isinstance(m, SpatialCrossAttention):
             #     m.init_weight()
         xavier_init(self.reference_points, distribution='uniform', bias=0.)
+        xavier_init(self.bev_reference_points, distribution='uniform', bias=0.)
         normal_(self.bev_query)
 
     def init_grid(self, grid_size, pc_range):
@@ -253,15 +262,23 @@ class DeformableDetr3DTransformer(BaseModule):
         # spatial_shapes: [num_levels, 2]
         # level_start_index: [num_levels, ]
         value, spatial_shapes, level_start_index = flatten_features(mlvl_feats)
-        # print(f'value: {value.shape}')
+        # [num_query, bs, 1, 2]
+        reference_points = self.bev_reference_points(bev_query).sigmoid().unsqueeze(-2)
         # [x_range*y_range, bs, embed_dims]
         # TODO: get bev features from encoder and remove this line
         bev_memory = self.encoder(
             query=bev_query,
             value=value,
-            query_bev_pos=query_bev_pos,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
+            self_attn_args=dict(
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
+                level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]])
+            ),
+            cross_attn_args=dict(
+                query_bev_pos=query_bev_pos,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+            ),
             img_metas=img_metas,
         )
         # print(f'bev_memory: {bev_memory.shape}')
@@ -291,27 +308,194 @@ class DeformableDetr3DTransformer(BaseModule):
             value=bev_memory,
             query_pos=query_pos,
             reference_points=reference_points,
-            spatial_shapes=bev_memory.new_tensor([[self.grid.shape[0], self.grid.shape[1]]], dtype=torch.long),
-            level_start_index=bev_memory.new_tensor([0,self.grid.shape[0] * self.grid.shape[1]], dtype=torch.long),
+            spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
+            level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]]),
             reg_branches=reg_branches,
             **kwargs
         )
 
         # inter_states, inter_references = self.decoder(
-            # query=query,
-            # key=None,
-            # value=value,
-            # query_pos=query_pos,
-            # mlvl_feats=mlvl_feats,
-            # reference_points=reference_points,
-            # spatial_shapes=spatial_shapes,
-            # level_start_index=level_start_index,
-            # reg_branches=reg_branches,
-            # img_metas=img_metas,
-            # **kwargs)
+        # query=query,
+        # key=None,
+        # value=value,
+        # query_pos=query_pos,
+        # mlvl_feats=mlvl_feats,
+        # reference_points=reference_points,
+        # spatial_shapes=spatial_shapes,
+        # level_start_index=level_start_index,
+        # reg_branches=reg_branches,
+        # img_metas=img_metas,
+        # **kwargs)
 
         inter_references_out = inter_references
         return inter_states, init_reference_out, inter_references_out
+
+
+@TRANSFORMER_LAYER.register_module()
+class DeformableDetr3DTransformerLayer(BaseTransformerLayer):
+    """DeformableDetr3DTransformerLayer for vision transformer.
+
+    It can be built from `mmcv.ConfigDict` and support more flexible
+    customization, for example, using any number of `FFN or LN ` and
+    use different kinds of `attention` by specifying a list of `ConfigDict`
+    named `attn_cfgs`. It is worth mentioning that it supports `prenorm`
+    when you specifying `norm` as the first element of `operation_order`.
+    More details about the `prenorm`: `On Layer Normalization in the
+    Transformer Architecture <https://arxiv.org/abs/2002.04745>`_ .
+
+    Args:
+        attn_cfgs (list[`mmcv.ConfigDict`] | obj:`mmcv.ConfigDict` | None )):
+            Configs for `self_attention` or `cross_attention` modules,
+            The order of the configs in the list should be consistent with
+            corresponding attentions in operation_order.
+            If it is a dict, all of the attention modules in operation_order
+            will be built with this config. Default: None.
+        ffn_cfgs (list[`mmcv.ConfigDict`] | obj:`mmcv.ConfigDict` | None )):
+            Configs for FFN, The order of the configs in the list should be
+            consistent with corresponding ffn in operation_order.
+            If it is a dict, all of the attention modules in operation_order
+            will be built with this config.
+        operation_order (tuple[str]): The execution order of operation
+            in transformer. Such as ('self_attn', 'norm', 'ffn', 'norm').
+            Support `prenorm` when you specifying first element as `norm`.
+            Default: None.
+        norm_cfg (dict): Config dict for normalization layer.
+            Default: dict(type='LN').
+        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
+            Default: None.
+        batch_first (bool): Key, Query and Value are shape
+            of (batch, n, embed_dim)
+            or (n, batch, embed_dim). Default to False.
+    """
+
+    def __init__(self,
+                 attn_cfgs=None,
+                 ffn_cfgs=dict(
+                     type='FFN',
+                     embed_dims=256,
+                     feedforward_channels=1024,
+                     num_fcs=2,
+                     ffn_drop=0.,
+                     act_cfg=dict(type='ReLU', inplace=True),
+                 ),
+                 operation_order=None,
+                 norm_cfg=dict(type='LN'),
+                 init_cfg=None,
+                 batch_first=False,
+                 **kwargs):
+        super().__init__(
+            attn_cfgs=attn_cfgs,
+            ffn_cfgs=ffn_cfgs,
+            operation_order=operation_order,
+            norm_cfg=norm_cfg,
+            batch_first=batch_first,
+            init_cfg=init_cfg,
+            **kwargs
+        )
+
+    def forward(self,
+                query: Tensor,
+                key: Optional[Tensor] = None,
+                value: Optional[Tensor] = None,
+                query_pos: Optional[Tensor] = None,
+                key_pos: Optional[Tensor] = None,
+                attn_masks: Optional[Tensor] = None,
+                query_key_padding_mask: Optional[Tensor] = None,
+                key_padding_mask: Optional[Tensor] = None,
+                self_attn_args=dict(),
+                cross_attn_args=dict(),
+                **kwargs):
+        """Forward function for `TransformerDecoderLayer`.
+
+        **kwargs contains some specific arguments of attentions.
+
+        Args:
+            query (Tensor): The input query with shape
+                [num_queries, bs, embed_dims] if
+                self.batch_first is False, else
+                [bs, num_queries embed_dims].
+            key (Tensor): The key tensor with shape [num_keys, bs,
+                embed_dims] if self.batch_first is False, else
+                [bs, num_keys, embed_dims] .
+            value (Tensor): The value tensor with same shape as `key`.
+            query_pos (Tensor): The positional encoding for `query`.
+                Default: None.
+            key_pos (Tensor): The positional encoding for `key`.
+                Default: None.
+            attn_masks (List[Tensor] | None): 2D Tensor used in
+                calculation of corresponding attention. The length of
+                it should equal to the number of `attention` in
+                `operation_order`. Default: None.
+            query_key_padding_mask (Tensor): ByteTensor for `query`, with
+                shape [bs, num_queries]. Only used in `self_attn` layer.
+                Defaults to None.
+            key_padding_mask (Tensor): ByteTensor for `query`, with
+                shape [bs, num_keys]. Default: None.
+            self_attn_args (Dict): Additional arguments passed to the self-attention module.
+            cross_attn_args (Dict): Additional arguments passed to the cross-attention module.
+        Returns:
+            Tensor: forwarded results with shape [num_queries, bs, embed_dims].
+        """
+        norm_index = 0
+        attn_index = 0
+        ffn_index = 0
+        identity = query
+        if attn_masks is None:
+            attn_masks = [None for _ in range(self.num_attn)]
+        elif isinstance(attn_masks, torch.Tensor):
+            attn_masks = [
+                copy.deepcopy(attn_masks) for _ in range(self.num_attn)
+            ]
+            warnings.warn(f'Use same attn_mask in all attentions in '
+                          f'{self.__class__.__name__} ')
+        else:
+            assert len(attn_masks) == self.num_attn, f'The length of ' \
+                f'attn_masks {len(attn_masks)} must be equal ' \
+                f'to the number of attention in ' \
+                f'operation_order {self.num_attn}'
+
+        for layer in self.operation_order:
+            if layer == 'self_attn':
+                temp_key = temp_value = query
+                query = self.attentions[attn_index](
+                    query,
+                    temp_key,
+                    temp_value,
+                    identity if self.pre_norm else None,
+                    query_pos=query_pos,
+                    key_pos=query_pos,
+                    attn_mask=attn_masks[attn_index],
+                    key_padding_mask=query_key_padding_mask,
+                    **self_attn_args,
+                    **kwargs)
+                attn_index += 1
+                identity = query
+
+            elif layer == 'norm':
+                query = self.norms[norm_index](query)
+                norm_index += 1
+
+            elif layer == 'cross_attn':
+                query = self.attentions[attn_index](
+                    query,
+                    key,
+                    value,
+                    identity if self.pre_norm else None,
+                    query_pos=query_pos,
+                    key_pos=key_pos,
+                    attn_mask=attn_masks[attn_index],
+                    key_padding_mask=key_padding_mask,
+                    **cross_attn_args,
+                    **kwargs)
+                attn_index += 1
+                identity = query
+
+            elif layer == 'ffn':
+                query = self.ffns[ffn_index](
+                    query, identity if self.pre_norm else None)
+                ffn_index += 1
+
+        return query
 
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()

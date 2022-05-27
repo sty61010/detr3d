@@ -28,7 +28,7 @@ input_modality = dict(
 
 embed_dims = 256
 num_levels = 4
-grid_size=[2.048, 2.048, 8]
+grid_size = [2.048 * 2, 2.048 * 2, 8]
 
 model = dict(
     type='Detr3D',
@@ -70,18 +70,34 @@ model = dict(
                 type='DeformableDetr3DTransformerEncoder',
                 num_layers=6,
                 transformerlayers=dict(
-                    type='BaseTransformerLayer',
-                    attn_cfgs=dict(
-                        type='SpatialCrossAttention',
-                        attn_cfg=dict(
+                    type='DeformableDetr3DTransformerLayer',
+                    attn_cfgs=[
+                        dict(
                             type='MultiScaleDeformableAttention',
-                            num_levels=num_levels,
+                            num_levels=1,  # the number of levels of bev features
                             embed_dims=embed_dims,
+                        ),
+                        dict(
+                            type='SpatialCrossAttention',
+                            attn_cfg=dict(
+                                type='MultiScaleDeformableAttention',
+                                num_levels=num_levels,
+                                embed_dims=embed_dims,
+                            )
                         )
-                    ),
+                    ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
-                    operation_order=('cross_attn', 'norm', 'ffn', 'norm'))),
+                    # ffn_cfgs=dict(
+                    #     feedforward_channels=512,
+                    #     ffn_drop=0.1,
+                    # ),
+                    operation_order=(
+                        'self_attn', 'norm',
+                        'cross_attn', 'norm', 'ffn', 'norm'
+                    )
+                )
+            ),
             decoder=dict(
                 type='DeformableDetr3DTransformerDecoder',
                 num_layers=6,
