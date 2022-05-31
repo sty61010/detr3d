@@ -1,3 +1,5 @@
+import warnings
+import copy
 import numpy as np
 import torch
 from torch import Tensor
@@ -5,11 +7,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from mmcv.cnn import xavier_init, constant_init
 from mmcv.cnn.bricks.registry import (ATTENTION,
+                                      TRANSFORMER_LAYER,
                                       TRANSFORMER_LAYER_SEQUENCE)
-from mmcv.cnn.bricks.transformer import (MultiScaleDeformableAttention,
+from mmcv.cnn.bricks.transformer import (BaseTransformerLayer,
+                                         MultiScaleDeformableAttention,
                                          TransformerLayerSequence,
                                          build_transformer_layer_sequence,
-                                         build_attention,
+                                         build_attention
                                          )
 from mmcv.runner.base_module import BaseModule
 
@@ -90,14 +94,16 @@ class DeformableDetr3DTransformerEncoder(TransformerLayerSequence):
         #                               f'Please specify post_norm_cfg'
         self.post_norm = None
 
-    def forward(self,             
+    def forward(self,
                 query,
                 key=None,
                 value=None,
-                query_bev_pos=None,
-                spatial_shapes=None,
-                level_start_index=None,
-                img_metas=None, 
+                # query_bev_pos=None,
+                # spatial_shapes=None,
+                # level_start_index=None,
+                img_metas=None,
+                self_attn_args=dict(),
+                cross_attn_args=dict(),
                 **kwargs):
         """Forward function for `TransformerCoder`.
         Returns:
@@ -106,10 +112,12 @@ class DeformableDetr3DTransformerEncoder(TransformerLayerSequence):
         x = super().forward(query=query,
                             key=key,
                             value=value,
-                            query_bev_pos=query_bev_pos,
-                            spatial_shapes=spatial_shapes,
-                            level_start_index=level_start_index,
+                            # query_bev_pos=query_bev_pos,
+                            # spatial_shapes=spatial_shapes,
+                            # level_start_index=level_start_index,
                             img_metas=img_metas,
+                            self_attn_args=self_attn_args,
+                            cross_attn_args=cross_attn_args,
                             **kwargs)
         # if self.post_norm is not None:
         #     x = self.post_norm(x)
@@ -145,32 +153,37 @@ class DeformableDetr3DTransformer(BaseModule):
         self.num_cams = num_cams
         self.two_stage_num_proposals = two_stage_num_proposals
 
-        """ Initialize grid for bev grid: [x_voxels, y_voxels, 2]
+        """ Initialize grid for bev grid: [y_range, x_range, 2]
             (last dimesion for x, y coordinate)
         """
-        self.grid = self.init_grid(grid_size=grid_size, pc_range=pc_range)
-        # bev_query: [x_range * y_range, C]
+        self.grid, self.normalized_grid_index = self.init_grid(grid_size=grid_size, pc_range=pc_range)
+        # bev_query: [y_range * x_range, C]
         # self.bev_query = nn.Embedding(self.grid.shape[0] * self.grid.shape[1],
         #                               self.embed_dims)
         # self.bev_query = nn.Parameter(torch.Tensor(self.grid.shape[0] * self.grid.shape[1],
         #                                            self.embed_dims))
+        self.bev_pos_emb_x = nn.Embedding(self.grid.shape[1], self.embed_dims // 2)
+        self.bev_pos_emb_y = nn.Embedding(self.grid.shape[0], self.embed_dims // 2)
+
         self.init_layers()
 
     def init_layers(self):
-        """ Initialize layers of the DeformableDer3DTransformer."""
-        
+
+        """Initialize layers of the DeformableDer3DTransformer."""
         self.reference_points = nn.Linear(self.embed_dims, 3)
 
         """ Generate bev_query_pos to bev_qyery
                 Input:  query_bev_pos: [x_range, y_range, bs, 2] -> [x_range * y_range, bs, 2]
                 output: bev_query: [x_range * y_range, C] -> [x_range * y_range, bs, C]
         """ 
-        self.grid_to_query = nn.Sequential(
-            nn.Linear(2, self.embed_dims),
-            nn.GELU(),
-            nn.Linear(self.embed_dims, self.embed_dims),
-            # nn.ReLU(),
-            )
+        # self.grid_to_query = nn.Sequential(
+        #     nn.Linear(2, self.embed_dims),
+        #     nn.GELU(),
+        #     nn.Linear(self.embed_dims, self.embed_dims),
+        #     )
+
+        nn.init.uniform_(self.bev_pos_emb_x.weight)
+        nn.init.uniform_(self.bev_pos_emb_y.weight)
 
     def init_weights(self):
         """Initialize the transformer weights."""
@@ -187,15 +200,15 @@ class DeformableDetr3DTransformer(BaseModule):
             # if isinstance(m, SpatialCrossAttention):
             #     m.init_weight()
         xavier_init(self.reference_points, distribution='uniform', bias=0.)
-        xavier_init(self.grid_to_query, distribution='uniform', bias=0.)
+        # xavier_init(self.grid_to_query, distribution='uniform', bias=0.)
         # normal_(self.bev_query)
+
 
     def init_grid(self, grid_size, pc_range):
         """Initializes Grid Generator for frustum features
         Args:
             grid_size (list): Voxel shape [X, Y, Z]
             pc_range (list): Voxelization point cloud range [X_min, Y_min, Z_min, X_max, Y_max, Z_max]
-            d_bound (list): Depth bound [depth_start, depth_end, depth_step]
         """
         self.grid_size = torch.tensor(grid_size)
         pc_range = torch.tensor(pc_range).reshape(2, 3)
@@ -205,9 +218,39 @@ class DeformableDetr3DTransformer(BaseModule):
         # print(f'num_xyz_points: {num_xyz_points}')
         x, y, z = [torch.linspace(pc_min, pc_max, num_points)
                    for pc_min, pc_max, num_points, size in zip(self.pc_min, self.pc_max, num_xyz_points, self.grid_size)]
+        # Warning: the indexing of this function is 'ij'. According to torch documentation, the default behaviour of `torch.meshgrid` will be changed to 'xy', so this function will be failed in the future.
+        yy, xx = torch.meshgrid(y, x)
+        # This shape meets the [H, W] format of BEV map
+        # [Y, X, 2]
+        xy_map = torch.stack([xx, yy], dim=-1)
 
-        # [X, Y, 2]
-        return torch.stack(torch.meshgrid(x, y), dim=-1)
+        x_index = torch.linspace(0, 1, num_xyz_points[0])
+        y_index = torch.linspace(0, 1, num_xyz_points[1])
+        yy_index, xx_index = torch.meshgrid(y_index, x_index)
+        # This shape meets the [H, W] format of BEV map
+        # [Y, X, 2]
+        xy_index = torch.stack([xx_index, yy_index], dim=-1)
+        assert xy_map.shape == xy_index.shape
+        return xy_map, xy_index
+
+    def generate_PE_learned(self, query_bev_pos):
+        # query_bev_pos = query_bev_pos.long()
+        y_range, x_range = query_bev_pos.shape[:2]
+
+        y = torch.arange(y_range, device=query_bev_pos.device)
+        x = torch.arange(x_range, device=query_bev_pos.device)
+        # x_emb = self.bev_pos_emb_x(query_bev_pos[..., 0])
+        # y_emb = self.bev_pos_emb_y(query_bev_pos[..., 1])
+        x_emb = self.bev_pos_emb_x(x)
+        y_emb = self.bev_pos_emb_y(y)
+
+        pos_emb = torch.cat([
+            x_emb.unsqueeze(0).repeat(y_range, 1, 1),
+            y_emb.unsqueeze(1).repeat(1, x_range, 1),
+        ], dim=-1)
+        # pos_emb = torch.stack([y_emb, x_emb], dim=-1)
+        
+        return pos_emb
 
     def forward(self,
                 mlvl_feats,
@@ -248,16 +291,21 @@ class DeformableDetr3DTransformer(BaseModule):
 
         # Check parameters
         bs = mlvl_feats[0].size(0)
-        # query_bev_pos: [x_range, y_range, 2]
-        query_bev_pos = self.grid.clone().to(mlvl_feats[0].device)
-        # query_bev_pos: [x_range, y_range, bs, 2] -> [x_range * y_range, bs, 2]
-        query_bev_pos = query_bev_pos.unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1)
+        # query_bev_pos: [y_range, x_range, 2] -> [y_range, x_range, bs, 2] -> [x_range * y_range, bs, 2]
+        query_bev_pos = self.grid.clone().unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1).to(mlvl_feats[0].device)
 
-        # bev_query: [x_range * y_range, C] -> [x_range * y_range, bs, C]
-        # bev_query = self.bev_query.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
-        bev_query = self.grid_to_query(query_bev_pos)
+        # bev_pos_emb: [y_range, x_range, C]
+        bev_pos_emb = self.generate_PE_learned(self.grid.clone().to(mlvl_feats[0].device))
+
+        # # query_bev_pos: 
+        # query_bev_pos = query_bev_pos
+
+        # bev_query: [y_range * x_range, C] -> [x_range * y_range, bs, C]
+        # bev_query = self.bev_query.weight.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
+        # bev_query = self.grid_to_query(query_bev_pos)
+        bev_query = bev_pos_emb.unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1)
         # print(f'bev_query: {bev_query.shape}')
-        # mlvl_feats[0]: [B, num_cameras, C, H_i, W_i]
+
         # mlvl_masks[0]: [B, embed_dims, h, w].
 
         # encoder
@@ -266,15 +314,24 @@ class DeformableDetr3DTransformer(BaseModule):
         # spatial_shapes: [num_levels, 2]
         # level_start_index: [num_levels, ]
         value, spatial_shapes, level_start_index = flatten_features(mlvl_feats)
-        # print(f'value: {value.shape}')
-        # [x_range*y_range, bs, embed_dims]
-        # TODO: get bev features from encoder and remove this line
+
+        # [y_range, x_range, 2] -> [y_range * x_range, 2] -> [bs, y_range * x_range, 2] -> [bs, y_range * x_range, 1, 2]
+        self_attn_reference_points = self.normalized_grid_index.flatten(0, 1).unsqueeze(0).repeat_interleave(bs, 0).unsqueeze(2).to(mlvl_feats[0].device)
+
+        # [y_range * x_range, bs, embed_dims]
         bev_memory = self.encoder(
             query=bev_query,
             value=value,
-            query_bev_pos=query_bev_pos,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
+            self_attn_args=dict(
+                reference_points=self_attn_reference_points,
+                spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
+                level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]])
+            ),
+            cross_attn_args=dict(
+                query_bev_pos=query_bev_pos,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+            ),
             img_metas=img_metas,
         )
         # print(f'bev_memory: {bev_memory.shape}')
@@ -304,28 +361,195 @@ class DeformableDetr3DTransformer(BaseModule):
             value=bev_memory,
             query_pos=query_pos,
             reference_points=reference_points,
-            spatial_shapes=bev_memory.new_tensor([[self.grid.shape[0], self.grid.shape[1]]], dtype=torch.long),
-            level_start_index=bev_memory.new_tensor([0,self.grid.shape[0] * self.grid.shape[1]], dtype=torch.long),
+            spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
+            level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]]),
             reg_branches=reg_branches,
             **kwargs
         )
         # print(f'inter_states: {inter_states.shape}')
         # print(f'inter_references: {inter_references.shape}')
         # inter_states, inter_references = self.decoder(
-            # query=query,
-            # key=None,
-            # value=value,
-            # query_pos=query_pos,
-            # mlvl_feats=mlvl_feats,
-            # reference_points=reference_points,
-            # spatial_shapes=spatial_shapes,
-            # level_start_index=level_start_index,
-            # reg_branches=reg_branches,
-            # img_metas=img_metas,
-            # **kwargs)
+        # query=query,
+        # key=None,
+        # value=value,
+        # query_pos=query_pos,
+        # mlvl_feats=mlvl_feats,
+        # reference_points=reference_points,
+        # spatial_shapes=spatial_shapes,
+        # level_start_index=level_start_index,
+        # reg_branches=reg_branches,
+        # img_metas=img_metas,
+        # **kwargs)
 
         inter_references_out = inter_references
         return inter_states, init_reference_out, inter_references_out
+
+
+@TRANSFORMER_LAYER.register_module()
+class DeformableDetr3DTransformerLayer(BaseTransformerLayer):
+    """DeformableDetr3DTransformerLayer for vision transformer.
+
+    It can be built from `mmcv.ConfigDict` and support more flexible
+    customization, for example, using any number of `FFN or LN ` and
+    use different kinds of `attention` by specifying a list of `ConfigDict`
+    named `attn_cfgs`. It is worth mentioning that it supports `prenorm`
+    when you specifying `norm` as the first element of `operation_order`.
+    More details about the `prenorm`: `On Layer Normalization in the
+    Transformer Architecture <https://arxiv.org/abs/2002.04745>`_ .
+
+    Args:
+        attn_cfgs (list[`mmcv.ConfigDict`] | obj:`mmcv.ConfigDict` | None )):
+            Configs for `self_attention` or `cross_attention` modules,
+            The order of the configs in the list should be consistent with
+            corresponding attentions in operation_order.
+            If it is a dict, all of the attention modules in operation_order
+            will be built with this config. Default: None.
+        ffn_cfgs (list[`mmcv.ConfigDict`] | obj:`mmcv.ConfigDict` | None )):
+            Configs for FFN, The order of the configs in the list should be
+            consistent with corresponding ffn in operation_order.
+            If it is a dict, all of the attention modules in operation_order
+            will be built with this config.
+        operation_order (tuple[str]): The execution order of operation
+            in transformer. Such as ('self_attn', 'norm', 'ffn', 'norm').
+            Support `prenorm` when you specifying first element as `norm`.
+            Default: None.
+        norm_cfg (dict): Config dict for normalization layer.
+            Default: dict(type='LN').
+        init_cfg (obj:`mmcv.ConfigDict`): The Config for initialization.
+            Default: None.
+        batch_first (bool): Key, Query and Value are shape
+            of (batch, n, embed_dim)
+            or (n, batch, embed_dim). Default to False.
+    """
+
+    def __init__(self,
+                 attn_cfgs=None,
+                 ffn_cfgs=dict(
+                     type='FFN',
+                     embed_dims=256,
+                     feedforward_channels=1024,
+                     num_fcs=2,
+                     ffn_drop=0.,
+                     act_cfg=dict(type='ReLU', inplace=True),
+                 ),
+                 operation_order=None,
+                 norm_cfg=dict(type='LN'),
+                 init_cfg=None,
+                 batch_first=False,
+                 **kwargs):
+        super().__init__(
+            attn_cfgs=attn_cfgs,
+            ffn_cfgs=ffn_cfgs,
+            operation_order=operation_order,
+            norm_cfg=norm_cfg,
+            batch_first=batch_first,
+            init_cfg=init_cfg,
+            **kwargs
+        )
+
+    def forward(self,
+                query: Tensor,
+                key: Optional[Tensor] = None,
+                value: Optional[Tensor] = None,
+                query_pos: Optional[Tensor] = None,
+                key_pos: Optional[Tensor] = None,
+                attn_masks: Optional[Tensor] = None,
+                query_key_padding_mask: Optional[Tensor] = None,
+                key_padding_mask: Optional[Tensor] = None,
+                self_attn_args=dict(),
+                cross_attn_args=dict(),
+                **kwargs):
+        """Forward function for `TransformerDecoderLayer`.
+
+        **kwargs contains some specific arguments of attentions.
+
+        Args:
+            query (Tensor): The input query with shape
+                [num_queries, bs, embed_dims] if
+                self.batch_first is False, else
+                [bs, num_queries embed_dims].
+            key (Tensor): The key tensor with shape [num_keys, bs,
+                embed_dims] if self.batch_first is False, else
+                [bs, num_keys, embed_dims] .
+            value (Tensor): The value tensor with same shape as `key`.
+            query_pos (Tensor): The positional encoding for `query`.
+                Default: None.
+            key_pos (Tensor): The positional encoding for `key`.
+                Default: None.
+            attn_masks (List[Tensor] | None): 2D Tensor used in
+                calculation of corresponding attention. The length of
+                it should equal to the number of `attention` in
+                `operation_order`. Default: None.
+            query_key_padding_mask (Tensor): ByteTensor for `query`, with
+                shape [bs, num_queries]. Only used in `self_attn` layer.
+                Defaults to None.
+            key_padding_mask (Tensor): ByteTensor for `query`, with
+                shape [bs, num_keys]. Default: None.
+            self_attn_args (Dict): Additional arguments passed to the self-attention module.
+            cross_attn_args (Dict): Additional arguments passed to the cross-attention module.
+        Returns:
+            Tensor: forwarded results with shape [num_queries, bs, embed_dims].
+        """
+        norm_index = 0
+        attn_index = 0
+        ffn_index = 0
+        identity = query
+        if attn_masks is None:
+            attn_masks = [None for _ in range(self.num_attn)]
+        elif isinstance(attn_masks, torch.Tensor):
+            attn_masks = [
+                copy.deepcopy(attn_masks) for _ in range(self.num_attn)
+            ]
+            warnings.warn(f'Use same attn_mask in all attentions in '
+                          f'{self.__class__.__name__} ')
+        else:
+            assert len(attn_masks) == self.num_attn, f'The length of ' \
+                f'attn_masks {len(attn_masks)} must be equal ' \
+                f'to the number of attention in ' \
+                f'operation_order {self.num_attn}'
+
+        for layer in self.operation_order:
+            if layer == 'self_attn':
+                temp_key = temp_value = query
+                query = self.attentions[attn_index](
+                    query,
+                    temp_key,
+                    temp_value,
+                    identity if self.pre_norm else None,
+                    query_pos=query_pos,
+                    key_pos=query_pos,
+                    attn_mask=attn_masks[attn_index],
+                    key_padding_mask=query_key_padding_mask,
+                    **self_attn_args,
+                    **kwargs)
+                attn_index += 1
+                identity = query
+
+            elif layer == 'norm':
+                query = self.norms[norm_index](query)
+                norm_index += 1
+
+            elif layer == 'cross_attn':
+                query = self.attentions[attn_index](
+                    query,
+                    key,
+                    value,
+                    identity if self.pre_norm else None,
+                    query_pos=query_pos,
+                    key_pos=key_pos,
+                    attn_mask=attn_masks[attn_index],
+                    key_padding_mask=key_padding_mask,
+                    **cross_attn_args,
+                    **kwargs)
+                attn_index += 1
+                identity = query
+
+            elif layer == 'ffn':
+                query = self.ffns[ffn_index](
+                    query, identity if self.pre_norm else None)
+                ffn_index += 1
+
+        return query
 
 
 @TRANSFORMER_LAYER_SEQUENCE.register_module()
