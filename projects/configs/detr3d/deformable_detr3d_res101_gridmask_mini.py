@@ -28,7 +28,7 @@ input_modality = dict(
 
 embed_dims = 256
 num_levels = 4
-grid_size = [2.048 * 2, 2.048 * 2, 8]
+grid_size = [1.024, 1.024, 8]
 
 model = dict(
     type='Detr3D',
@@ -68,7 +68,13 @@ model = dict(
             pc_range=point_cloud_range,
             encoder=dict(
                 type='DeformableDetr3DTransformerEncoder',
-                num_layers=6,
+                num_layers=3,
+                positional_encoding=dict(
+                    type='SinePositionalEncoding',
+                    num_feats=embed_dims // 2,
+                    normalize=True,
+                    offset=-0.5,
+                ),
                 transformerlayers=dict(
                     type='DeformableDetr3DTransformerLayer',
                     attn_cfgs=[
@@ -153,11 +159,11 @@ model = dict(
             max_num=300,
             voxel_size=voxel_size,
             num_classes=10),
-        positional_encoding=dict(
-            type='SinePositionalEncoding',
-            num_feats=128,
-            normalize=True,
-            offset=-0.5),
+        # positional_encoding=dict(
+        #     type='SinePositionalEncoding',
+        #     num_feats=embed_dims // 2,
+        #     normalize=True,
+        #     offset=-0.5),
         loss_cls=dict(
             type='FocalLoss',
             use_sigmoid=True,
@@ -186,7 +192,7 @@ dataset_type = 'NuScenesDataset'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 
-data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
+data_root = '/dataset/nuscenes/v1.0-mini/'
 # data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
 file_client_args = dict(backend='disk')
