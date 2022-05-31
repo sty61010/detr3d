@@ -1,5 +1,5 @@
 _base_ = [
-    '/home/master/10/cytseng/detr3d/projects/configs/detr3d/deformable_detr3d_res101_gridmask.py',
+    './deformable_detr3d_res101_gridmask.py',
 ]
 
 
@@ -12,7 +12,7 @@ data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
 db_sampler = dict(
     data_root=data_root,
     info_path=data_root + 'nuscenes_dbinfos_train.pkl',
-    )
+)
 
 
 data_length = 6000
@@ -27,8 +27,8 @@ data = dict(
     val=dict(
         data_root=data_root,
         ann_file=data_root + 'nuscenes_infos_val.pkl',
-        ),
+    ),
     test=dict(
         data_root=data_root,
         ann_file=data_root + 'nuscenes_infos_val.pkl',
-        ))
+    ))
