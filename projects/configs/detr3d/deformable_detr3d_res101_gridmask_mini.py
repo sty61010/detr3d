@@ -3,7 +3,6 @@ _base_ = [
 ]
 
 
-# data_root = '/home/master/10/cytseng/mmdetection3d/data/nuscenes/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 

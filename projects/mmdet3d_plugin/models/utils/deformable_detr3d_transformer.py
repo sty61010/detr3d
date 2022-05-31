@@ -13,13 +13,14 @@ from mmcv.cnn.bricks.transformer import (BaseTransformerLayer,
                                          MultiScaleDeformableAttention,
                                          TransformerLayerSequence,
                                          build_transformer_layer_sequence,
-                                         build_attention
+                                         build_positional_encoding
                                          )
 from mmcv.runner.base_module import BaseModule
 
 from mmdet.models.utils.builder import TRANSFORMER
 from torch.nn.init import normal_
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
 from .detr3d_transformer import Detr3DCrossAtten
 from .dca import DeformableCrossAttention
 from .spatial_cross_attention import SpatialCrossAttention
@@ -83,8 +84,8 @@ class DeformableDetr3DTransformerEncoder(TransformerLayerSequence):
             `LN`. Only used when `self.pre_norm` is `True`
     """
 
-    def __init__(self, *args, post_norm_cfg=dict(type='LN'), **kwargs):
-        super(DeformableDetr3DTransformerEncoder, self).__init__(*args, **kwargs)
+    def __init__(self, transformerlayers, num_layers, positional_encoding=None, post_norm_cfg=dict(type='LN'), **kwargs):
+        super().__init__(transformerlayers=transformerlayers, num_layers=num_layers, **kwargs)
         # if post_norm_cfg is not None:
         #     self.post_norm = build_norm_layer(
         #         post_norm_cfg, self.embed_dims)[1] if self.pre_norm else None
@@ -92,29 +93,36 @@ class DeformableDetr3DTransformerEncoder(TransformerLayerSequence):
         #     assert not self.pre_norm, f'Use prenorm in ' \
         #                               f'{self.__class__.__name__},' \
         #                               f'Please specify post_norm_cfg'
+        self.positional_encoding = build_positional_encoding(positional_encoding) if positional_encoding is not None else None
         self.post_norm = None
 
     def forward(self,
-                query,
-                key=None,
-                value=None,
-                # query_bev_pos=None,
-                # spatial_shapes=None,
-                # level_start_index=None,
-                img_metas=None,
-                self_attn_args=dict(),
-                cross_attn_args=dict(),
+                query: Tensor,
+                key: Optional[Tensor] = None,
+                value: Optional[Tensor] = None,
+                grid_shape: Optional[Tuple[int]] = None,
+                img_metas: List[Dict[str, Any]] = None,
+                self_attn_args: Optional[Dict[str, Any]] = dict(),
+                cross_attn_args: Optional[Dict[str, Any]] = dict(),
                 **kwargs):
         """Forward function for `TransformerCoder`.
         Returns:
             Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
+        query_pos = None
+        if self.positional_encoding is not None:
+            _, bs, _ = query.shape
+            grid_H, grid_W = grid_shape
+            # zero values mean valid positions
+            mask = query.new_zeros((bs, grid_H, grid_W), dtype=torch.int)
+            # [bs, embed_dims, grid_H, grid_W]
+            query_pos = self.positional_encoding(mask)
+            # [grid_H * grid_W, bs, embed_dims]
+            query_pos = query_pos.flatten(-2).permute(2, 0, 1)
         x = super().forward(query=query,
                             key=key,
                             value=value,
-                            # query_bev_pos=query_bev_pos,
-                            # spatial_shapes=spatial_shapes,
-                            # level_start_index=level_start_index,
+                            query_pos=query_pos,
                             img_metas=img_metas,
                             self_attn_args=self_attn_args,
                             cross_attn_args=cross_attn_args,
@@ -158,12 +166,12 @@ class DeformableDetr3DTransformer(BaseModule):
         """
         self.grid, self.normalized_grid_index = self.init_grid(grid_size=grid_size, pc_range=pc_range)
         # bev_query: [y_range * x_range, C]
-        # self.bev_query = nn.Embedding(self.grid.shape[0] * self.grid.shape[1],
-        #                               self.embed_dims)
+        self.bev_query = nn.Embedding(self.grid.shape[0] * self.grid.shape[1],
+                                      self.embed_dims)
         # self.bev_query = nn.Parameter(torch.Tensor(self.grid.shape[0] * self.grid.shape[1],
         #                                            self.embed_dims))
-        self.bev_pos_emb_x = nn.Embedding(self.grid.shape[1], self.embed_dims // 2)
-        self.bev_pos_emb_y = nn.Embedding(self.grid.shape[0], self.embed_dims // 2)
+        # self.bev_pos_emb_x = nn.Embedding(self.grid.shape[1], self.embed_dims // 2)
+        # self.bev_pos_emb_y = nn.Embedding(self.grid.shape[0], self.embed_dims // 2)
 
         self.init_layers()
 
@@ -182,8 +190,8 @@ class DeformableDetr3DTransformer(BaseModule):
         #     nn.Linear(self.embed_dims, self.embed_dims),
         #     )
 
-        nn.init.uniform_(self.bev_pos_emb_x.weight)
-        nn.init.uniform_(self.bev_pos_emb_y.weight)
+        # nn.init.uniform_(self.bev_pos_emb_x.weight)
+        # nn.init.uniform_(self.bev_pos_emb_y.weight)
 
     def init_weights(self):
         """Initialize the transformer weights."""
@@ -233,24 +241,24 @@ class DeformableDetr3DTransformer(BaseModule):
         assert xy_map.shape == xy_index.shape
         return xy_map, xy_index
 
-    def generate_PE_learned(self, query_bev_pos):
-        # query_bev_pos = query_bev_pos.long()
-        y_range, x_range = query_bev_pos.shape[:2]
+    # def generate_PE_learned(self, query_bev_pos):
+    #     # query_bev_pos = query_bev_pos.long()
+    #     y_range, x_range = query_bev_pos.shape[:2]
 
-        y = torch.arange(y_range, device=query_bev_pos.device)
-        x = torch.arange(x_range, device=query_bev_pos.device)
-        # x_emb = self.bev_pos_emb_x(query_bev_pos[..., 0])
-        # y_emb = self.bev_pos_emb_y(query_bev_pos[..., 1])
-        x_emb = self.bev_pos_emb_x(x)
-        y_emb = self.bev_pos_emb_y(y)
+    #     y = torch.arange(y_range, device=query_bev_pos.device)
+    #     x = torch.arange(x_range, device=query_bev_pos.device)
+    #     # x_emb = self.bev_pos_emb_x(query_bev_pos[..., 0])
+    #     # y_emb = self.bev_pos_emb_y(query_bev_pos[..., 1])
+    #     x_emb = self.bev_pos_emb_x(x)
+    #     y_emb = self.bev_pos_emb_y(y)
 
-        pos_emb = torch.cat([
-            x_emb.unsqueeze(0).repeat(y_range, 1, 1),
-            y_emb.unsqueeze(1).repeat(1, x_range, 1),
-        ], dim=-1)
-        # pos_emb = torch.stack([y_emb, x_emb], dim=-1)
+    #     pos_emb = torch.cat([
+    #         x_emb.unsqueeze(0).repeat(y_range, 1, 1),
+    #         y_emb.unsqueeze(1).repeat(1, x_range, 1),
+    #     ], dim=-1)
+    #     # pos_emb = torch.stack([y_emb, x_emb], dim=-1)
         
-        return pos_emb
+    #     return pos_emb
 
     def forward(self,
                 mlvl_feats,
@@ -295,15 +303,12 @@ class DeformableDetr3DTransformer(BaseModule):
         query_bev_pos = self.grid.clone().unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1).to(mlvl_feats[0].device)
 
         # bev_pos_emb: [y_range, x_range, C]
-        bev_pos_emb = self.generate_PE_learned(self.grid.clone().to(mlvl_feats[0].device))
-
-        # # query_bev_pos: 
-        # query_bev_pos = query_bev_pos
+        # bev_pos_emb = self.generate_PE_learned(self.grid.clone().to(mlvl_feats[0].device))
 
         # bev_query: [y_range * x_range, C] -> [x_range * y_range, bs, C]
-        # bev_query = self.bev_query.weight.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
+        bev_query = self.bev_query.weight.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
         # bev_query = self.grid_to_query(query_bev_pos)
-        bev_query = bev_pos_emb.unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1)
+        # bev_query = bev_pos_emb.unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1)
         # print(f'bev_query: {bev_query.shape}')
 
         # mlvl_masks[0]: [B, embed_dims, h, w].
@@ -322,6 +327,7 @@ class DeformableDetr3DTransformer(BaseModule):
         bev_memory = self.encoder(
             query=bev_query,
             value=value,
+            grid_shape=self.grid.shape[:2],
             self_attn_args=dict(
                 reference_points=self_attn_reference_points,
                 spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
@@ -342,19 +348,15 @@ class DeformableDetr3DTransformer(BaseModule):
 
         # query: [num_query, bs, embed_dims]
         # query_pos: [num_query, bs, embed_dims]
-        query_pos, query = torch.split(query_embed, self.embed_dims, dim=1)
-        query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1)
-        query = query.unsqueeze(0).expand(bs, -1, -1)
+        query_pos, query = torch.split(query_embed, self.embed_dims, dim=-1)
+        query_pos = query_pos.unsqueeze(1).repeat_interleave(bs, 1)
+        query = query.unsqueeze(1).repeat_interleave(bs, 1)
         # reference_points: [bs, num_query, 3]
-        reference_points = self.reference_points(query_pos).sigmoid()
+        reference_points = self.reference_points(query_pos).sigmoid().transpose(0, 1)
         init_reference_out = reference_points
 
-        # decoder
-        query = query.permute(1, 0, 2)
-        query_pos = query_pos.permute(1, 0, 2)
-
-        # inter_states: [num_camera, B, num_query, embed_dims]
-        # inter_references: [num_camera, B, num_query, 3]
+        # inter_states: [num_query, bs, embed_dims]
+        # inter_references: [bs, num_query, 3]
         inter_states, inter_references = self.decoder(
             query=query,
             key=None,
@@ -568,6 +570,7 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
     def forward(
         self,
         query: Tensor,
+        key: Tensor,
         value: Tensor,
         reference_points: Tensor,
         spatial_shapes: Tensor,
@@ -600,6 +603,7 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
             reference_points_input = reference_points
             output = layer(
                 output,
+                key=key,
                 value=value,
                 reference_points=reference_points_input[..., None, :2],
                 spatial_shapes=spatial_shapes,

@@ -29,7 +29,8 @@ input_modality = dict(
 embed_dims = 256
 num_levels = 3
 # num_levels = 4
-grid_size=[2.048, 2.048, 8]
+# grid_size=[2.048, 2.048, 8]
+grid_size = [1.024, 1.024, 8]
 
 model = dict(
     type='Detr3D',
@@ -70,6 +71,12 @@ model = dict(
             encoder=dict(
                 type='DeformableDetr3DTransformerEncoder',
                 num_layers=3,
+                positional_encoding=dict(
+                    type='SinePositionalEncoding',
+                    num_feats=embed_dims // 2,
+                    normalize=True,
+                    offset=-0.5,
+                ),
                 transformerlayers=dict(
                     type='DeformableDetr3DTransformerLayer',
                     attn_cfgs=[
@@ -102,7 +109,7 @@ model = dict(
             ),
             decoder=dict(
                 type='DeformableDetr3DTransformerDecoder',
-                num_layers=2,
+                num_layers=3,
                 return_intermediate=True,
 
                 transformerlayers=dict(
