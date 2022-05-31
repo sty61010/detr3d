@@ -102,7 +102,7 @@ model = dict(
                     # ),
                     operation_order=(
                         'self_attn', 'norm',
-                        'cross_attn', 'norm', 
+                        'cross_attn', 'norm',
                         'ffn', 'norm'
                     )
                 )
@@ -164,11 +164,6 @@ model = dict(
             max_num=300,
             voxel_size=voxel_size,
             num_classes=10),
-        positional_encoding=dict(
-            type='SinePositionalEncoding',
-            num_feats=128,
-            normalize=True,
-            offset=-0.5),
         loss_cls=dict(
             type='FocalLoss',
             use_sigmoid=True,
