@@ -156,8 +156,8 @@ class DeformableDetr3DTransformer(BaseModule):
         """ Initialize grid for bev grid: [x_voxels, y_voxels, 2]
             (last dimesion for x, y coordinate)
         """
-        self.grid = self.init_grid(grid_size=grid_size, pc_range=pc_range)
-        # bev_query: [x_range * y_range, C]
+        self.grid, self.normalized_grid_index = self.init_grid(grid_size=grid_size, pc_range=pc_range)
+        # bev_query: [y_range * x_range, C]
         # self.bev_query = nn.Embedding(self.grid[0] * self.grid[1],
         #                               self.embed_dims)
         self.bev_query = nn.Parameter(torch.Tensor(self.grid.shape[0] * self.grid.shape[1],
@@ -166,7 +166,6 @@ class DeformableDetr3DTransformer(BaseModule):
 
     def init_layers(self):
         """Initialize layers of the DeformableDer3DTransformer."""
-        self.bev_reference_points = nn.Linear(self.embed_dims, 2)
         self.reference_points = nn.Linear(self.embed_dims, 3)
 
     def init_weights(self):
@@ -184,7 +183,6 @@ class DeformableDetr3DTransformer(BaseModule):
             # if isinstance(m, SpatialCrossAttention):
             #     m.init_weight()
         xavier_init(self.reference_points, distribution='uniform', bias=0.)
-        xavier_init(self.bev_reference_points, distribution='uniform', bias=0.)
         normal_(self.bev_query)
 
     def init_grid(self, grid_size, pc_range):
@@ -192,7 +190,6 @@ class DeformableDetr3DTransformer(BaseModule):
         Args:
             grid_size (list): Voxel shape [X, Y, Z]
             pc_range (list): Voxelization point cloud range [X_min, Y_min, Z_min, X_max, Y_max, Z_max]
-            d_bound (list): Depth bound [depth_start, depth_end, depth_step]
         """
         self.grid_size = torch.tensor(grid_size)
         pc_range = torch.tensor(pc_range).reshape(2, 3)
@@ -202,9 +199,20 @@ class DeformableDetr3DTransformer(BaseModule):
         # print(f'num_xyz_points: {num_xyz_points}')
         x, y, z = [torch.linspace(pc_min, pc_max, num_points)
                    for pc_min, pc_max, num_points, size in zip(self.pc_min, self.pc_max, num_xyz_points, self.grid_size)]
+        # Warning: the indexing of this function is 'ij'. According to torch documentation, the default behaviour of `torch.meshgrid` will be changed to 'xy', so this function will be failed in the future.
+        yy, xx = torch.meshgrid(y, x)
+        # This shape meets the [H, W] format of BEV map
+        # [Y, X, 2]
+        xy_map = torch.stack([xx, yy], dim=-1)
 
-        # [X, Y, 2]
-        return torch.stack(torch.meshgrid(x, y), dim=-1)
+        x_index = torch.linspace(0, 1, num_xyz_points[0])
+        y_index = torch.linspace(0, 1, num_xyz_points[1])
+        yy_index, xx_index = torch.meshgrid(y_index, x_index)
+        # This shape meets the [H, W] format of BEV map
+        # [Y, X, 2]
+        xy_index = torch.stack([xx_index, yy_index], dim=-1)
+        assert xy_map.shape == xy_index.shape
+        return xy_map, xy_index
 
     def forward(self,
                 mlvl_feats,
@@ -245,16 +253,11 @@ class DeformableDetr3DTransformer(BaseModule):
 
         # Check parameters
         bs = mlvl_feats[0].size(0)
-        # query_bev_pos: [x_range, y_range, 2]
-        query_bev_pos = self.grid.clone().to(mlvl_feats[0].device)
-        # query_bev_pos: [x_range, y_range, bs, 2] -> [x_range * y_range, bs, 2]
-        query_bev_pos = query_bev_pos.unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1)
+        # [y_range, x_range, 2] -> [y_range, x_range, bs, 2] -> [y_range * x_range, bs, 2]
+        query_bev_pos = self.grid.unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1).to(mlvl_feats[0].device)
 
-        # bev_query: [x_range * y_range, C] -> [x_range * y_range, bs, C]
+        # [y_range * x_range, C] -> [y_range * x_range, bs, C]
         bev_query = self.bev_query.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
-
-        # mlvl_feats[0]: [B, num_cameras, C, H_i, W_i]
-        # mlvl_masks[0]: [B, embed_dims, h, w].
 
         # encoder
         ###
@@ -262,15 +265,16 @@ class DeformableDetr3DTransformer(BaseModule):
         # spatial_shapes: [num_levels, 2]
         # level_start_index: [num_levels, ]
         value, spatial_shapes, level_start_index = flatten_features(mlvl_feats)
-        # [num_query, bs, 1, 2]
-        reference_points = self.bev_reference_points(bev_query).sigmoid().unsqueeze(-2)
-        # [x_range*y_range, bs, embed_dims]
-        # TODO: get bev features from encoder and remove this line
+
+        # [y_range, x_range, 2] -> [y_range * x_range, 2] -> [bs, y_range * x_range, 2] -> [bs, y_range * x_range, 1, 2]
+        self_attn_reference_points = self.normalized_grid_index.flatten(0, 1).unsqueeze(0).repeat_interleave(bs, 0).unsqueeze(2).to(mlvl_feats[0].device)
+
+        # [y_range * x_range, bs, embed_dims]
         bev_memory = self.encoder(
             query=bev_query,
             value=value,
             self_attn_args=dict(
-                reference_points=reference_points,
+                reference_points=self_attn_reference_points,
                 spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
                 level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]])
             ),
