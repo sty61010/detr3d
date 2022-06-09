@@ -93,7 +93,8 @@ class DeformableDetr3DTransformerEncoder(TransformerLayerSequence):
         #     assert not self.pre_norm, f'Use prenorm in ' \
         #                               f'{self.__class__.__name__},' \
         #                               f'Please specify post_norm_cfg'
-        self.positional_encoding = build_positional_encoding(positional_encoding) if positional_encoding is not None else None
+        self.positional_encoding = build_positional_encoding(
+            positional_encoding) if positional_encoding is not None else None
         self.post_norm = None
 
     def forward(self,
@@ -176,14 +177,13 @@ class DeformableDetr3DTransformer(BaseModule):
         self.init_layers()
 
     def init_layers(self):
-
         """Initialize layers of the DeformableDer3DTransformer."""
         self.reference_points = nn.Linear(self.embed_dims, 3)
 
         """ Generate bev_query_pos to bev_qyery
                 Input:  query_bev_pos: [x_range, y_range, bs, 2] -> [x_range * y_range, bs, 2]
                 output: bev_query: [x_range * y_range, C] -> [x_range * y_range, bs, C]
-        """ 
+        """
         # self.grid_to_query = nn.Sequential(
         #     nn.Linear(2, self.embed_dims),
         #     nn.GELU(),
@@ -210,7 +210,6 @@ class DeformableDetr3DTransformer(BaseModule):
         xavier_init(self.reference_points, distribution='uniform', bias=0.)
         # xavier_init(self.grid_to_query, distribution='uniform', bias=0.)
         # normal_(self.bev_query)
-
 
     def init_grid(self, grid_size, pc_range):
         """Initializes Grid Generator for frustum features
@@ -257,7 +256,7 @@ class DeformableDetr3DTransformer(BaseModule):
     #         y_emb.unsqueeze(1).repeat(1, x_range, 1),
     #     ], dim=-1)
     #     # pos_emb = torch.stack([y_emb, x_emb], dim=-1)
-        
+
     #     return pos_emb
 
     def forward(self,
@@ -321,7 +320,8 @@ class DeformableDetr3DTransformer(BaseModule):
         value, spatial_shapes, level_start_index = flatten_features(mlvl_feats)
 
         # [y_range, x_range, 2] -> [y_range * x_range, 2] -> [bs, y_range * x_range, 2] -> [bs, y_range * x_range, 1, 2]
-        self_attn_reference_points = self.normalized_grid_index.flatten(0, 1).unsqueeze(0).repeat_interleave(bs, 0).unsqueeze(2).to(mlvl_feats[0].device)
+        self_attn_reference_points = self.normalized_grid_index.flatten(0, 1).unsqueeze(
+            0).repeat_interleave(bs, 0).unsqueeze(2).to(mlvl_feats[0].device)
 
         # [y_range * x_range, bs, embed_dims]
         bev_memory = self.encoder(
@@ -355,8 +355,8 @@ class DeformableDetr3DTransformer(BaseModule):
         reference_points = self.reference_points(query_pos).sigmoid().transpose(0, 1)
         init_reference_out = reference_points
 
-        # inter_states: [num_query, bs, embed_dims]
-        # inter_references: [bs, num_query, 3]
+        # inter_states: [num_cameras, num_query, bs, embed_dims]
+        # inter_references: [num_cameras, bs, num_query, 3]
         inter_states, inter_references = self.decoder(
             query=query,
             key=None,
@@ -634,5 +634,7 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
         if self.return_intermediate:
             return torch.stack(intermediate), torch.stack(
                 intermediate_reference_points)
+
+        print(f'reference_points: {reference_points.shape}')
 
         return output, reference_points

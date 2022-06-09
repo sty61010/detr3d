@@ -71,11 +71,17 @@ model = dict(
             encoder=dict(
                 type='DeformableDetr3DTransformerEncoder',
                 num_layers=3,
+                # positional_encoding=dict(
+                #     type='SinePositionalEncoding',
+                #     num_feats=embed_dims // 2,
+                #     normalize=True,
+                #     offset=-0.5,
+                # ),
                 positional_encoding=dict(
-                    type='SinePositionalEncoding',
+                    type='LearnedPositionalEncoding',
                     num_feats=embed_dims // 2,
-                    normalize=True,
-                    offset=-0.5,
+                    row_num_embed=200,
+                    col_num_embed=200,
                 ),
                 transformerlayers=dict(
                     type='DeformableDetr3DTransformerLayer',
@@ -109,7 +115,7 @@ model = dict(
             ),
             decoder=dict(
                 type='DeformableDetr3DTransformerDecoder',
-                num_layers=3,
+                num_layers=6,
                 return_intermediate=True,
 
                 transformerlayers=dict(
