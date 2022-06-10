@@ -591,10 +591,11 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
                 otherwise would be passed a `None`.
         Returns:
             output(Tensor):
-                `[num_query, B, embed_dims]`
+                [1, num_query, bs, embed_dims] when `return_intermediate` is `False`, otherwise
+                it has shape [num_layers, num_query, bs, embed_dims].
             reference_points (Tensor): The reference
-                points of offset. has shape
-                `[bs, num_query, 3)]`
+                points of offset. has shape `[bs, num_query, 3)]` when `return_intermediate` is `False`,
+                otherwise it has shape [num_layers, bs, num_query, embed_dims].
         """
         output = query
         intermediate = []
@@ -635,6 +636,4 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
             return torch.stack(intermediate), torch.stack(
                 intermediate_reference_points)
 
-        print(f'reference_points: {reference_points.shape}')
-
-        return output, reference_points
+        return output.unsqueeze(0), reference_points.unsqueeze(0)
