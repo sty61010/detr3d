@@ -136,7 +136,9 @@ class DeformableDetr3DHead(DETRHead):
         #         self.positional_encoding(mlvl_masks[-1]))
 
         query_embeds = self.query_embedding.weight
-
+        # hs: [num_layers, num_query, bs, embed_dims]
+        # init_reference: [bs, num_query, 3]
+        # inter_references: [num_layers, bs, num_query, 3]
         hs, init_reference, inter_references = self.transformer(
             mlvl_feats,
             mlvl_masks,
@@ -145,6 +147,7 @@ class DeformableDetr3DHead(DETRHead):
             reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
             img_metas=img_metas,
         )
+        # [num_layers, bs, num_query, embed_dims]
         hs = hs.permute(0, 2, 1, 3)
         outputs_classes = []
         outputs_coords = []
