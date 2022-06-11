@@ -1,5 +1,5 @@
 _base_ = [
-    '/home/master/10/cytseng/detr3d/projects/configs/detr3d/detr3d_res101_gridmask.py',
+    './detr3d_res101_gridmask.py',
 ]
 
 
