@@ -80,8 +80,8 @@ model = dict(
                 positional_encoding=dict(
                     type='LearnedPositionalEncoding',
                     num_feats=embed_dims // 2,
-                    row_num_embed=200,
-                    col_num_embed=200,
+                    row_num_embed=int((point_cloud_range[4] - point_cloud_range[1]) / grid_size[1]),
+                    col_num_embed=int((point_cloud_range[3] - point_cloud_range[0]) / grid_size[0]),
                 ),
                 transformerlayers=dict(
                     type='DeformableDetr3DTransformerLayer',
@@ -102,10 +102,6 @@ model = dict(
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
-                    # ffn_cfgs=dict(
-                    #     feedforward_channels=512,
-                    #     ffn_drop=0.1,
-                    # ),
                     operation_order=(
                         'self_attn', 'norm',
                         'cross_attn', 'norm',
@@ -149,10 +145,6 @@ model = dict(
                         #     num_points=1,
                         #     embed_dims=embed_dims),
                     ],
-                    # ffn_cfgs=dict(
-                    #     feedforward_channels=512,
-                    #     ffn_drop=0.1,
-                    # ),
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
