@@ -169,29 +169,12 @@ class DeformableDetr3DTransformer(BaseModule):
         # bev_query: [y_range * x_range, C]
         self.bev_query = nn.Embedding(self.grid.shape[0] * self.grid.shape[1],
                                       self.embed_dims)
-        # self.bev_query = nn.Parameter(torch.Tensor(self.grid.shape[0] * self.grid.shape[1],
-        #                                            self.embed_dims))
-        # self.bev_pos_emb_x = nn.Embedding(self.grid.shape[1], self.embed_dims // 2)
-        # self.bev_pos_emb_y = nn.Embedding(self.grid.shape[0], self.embed_dims // 2)
 
         self.init_layers()
 
     def init_layers(self):
         """Initialize layers of the DeformableDer3DTransformer."""
         self.reference_points = nn.Linear(self.embed_dims, 3)
-
-        """ Generate bev_query_pos to bev_qyery
-                Input:  query_bev_pos: [x_range, y_range, bs, 2] -> [x_range * y_range, bs, 2]
-                output: bev_query: [x_range * y_range, C] -> [x_range * y_range, bs, C]
-        """
-        # self.grid_to_query = nn.Sequential(
-        #     nn.Linear(2, self.embed_dims),
-        #     nn.GELU(),
-        #     nn.Linear(self.embed_dims, self.embed_dims),
-        #     )
-
-        # nn.init.uniform_(self.bev_pos_emb_x.weight)
-        # nn.init.uniform_(self.bev_pos_emb_y.weight)
 
     def init_weights(self):
         """Initialize the transformer weights."""
@@ -208,8 +191,6 @@ class DeformableDetr3DTransformer(BaseModule):
             # if isinstance(m, SpatialCrossAttention):
             #     m.init_weight()
         xavier_init(self.reference_points, distribution='uniform', bias=0.)
-        # xavier_init(self.grid_to_query, distribution='uniform', bias=0.)
-        # normal_(self.bev_query)
 
     def init_grid(self, grid_size, pc_range):
         """Initializes Grid Generator for frustum features
@@ -239,25 +220,6 @@ class DeformableDetr3DTransformer(BaseModule):
         xy_index = torch.stack([xx_index, yy_index], dim=-1)
         assert xy_map.shape == xy_index.shape
         return xy_map, xy_index
-
-    # def generate_PE_learned(self, query_bev_pos):
-    #     # query_bev_pos = query_bev_pos.long()
-    #     y_range, x_range = query_bev_pos.shape[:2]
-
-    #     y = torch.arange(y_range, device=query_bev_pos.device)
-    #     x = torch.arange(x_range, device=query_bev_pos.device)
-    #     # x_emb = self.bev_pos_emb_x(query_bev_pos[..., 0])
-    #     # y_emb = self.bev_pos_emb_y(query_bev_pos[..., 1])
-    #     x_emb = self.bev_pos_emb_x(x)
-    #     y_emb = self.bev_pos_emb_y(y)
-
-    #     pos_emb = torch.cat([
-    #         x_emb.unsqueeze(0).repeat(y_range, 1, 1),
-    #         y_emb.unsqueeze(1).repeat(1, x_range, 1),
-    #     ], dim=-1)
-    #     # pos_emb = torch.stack([y_emb, x_emb], dim=-1)
-
-    #     return pos_emb
 
     def forward(self,
                 mlvl_feats,
@@ -301,16 +263,8 @@ class DeformableDetr3DTransformer(BaseModule):
         # query_bev_pos: [y_range, x_range, 2] -> [y_range, x_range, bs, 2] -> [x_range * y_range, bs, 2]
         query_bev_pos = self.grid.clone().unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1).to(mlvl_feats[0].device)
 
-        # bev_pos_emb: [y_range, x_range, C]
-        # bev_pos_emb = self.generate_PE_learned(self.grid.clone().to(mlvl_feats[0].device))
-
         # bev_query: [y_range * x_range, C] -> [x_range * y_range, bs, C]
         bev_query = self.bev_query.weight.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
-        # bev_query = self.grid_to_query(query_bev_pos)
-        # bev_query = bev_pos_emb.unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1)
-        # print(f'bev_query: {bev_query.shape}')
-
-        # mlvl_masks[0]: [B, embed_dims, h, w].
 
         # encoder
         ###
@@ -594,7 +548,7 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
                 [1, num_query, bs, embed_dims] when `return_intermediate` is `False`, otherwise
                 it has shape [num_layers, num_query, bs, embed_dims].
             reference_points (Tensor): The reference
-                points of offset. has shape `[bs, num_query, 3)]` when `return_intermediate` is `False`,
+                points of offset. has shape `[1, bs, num_query, 3)]` when `return_intermediate` is `False`,
                 otherwise it has shape [num_layers, bs, num_query, embed_dims].
         """
         output = query
