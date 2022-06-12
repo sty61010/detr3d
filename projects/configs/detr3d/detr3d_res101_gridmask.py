@@ -120,8 +120,8 @@ dataset_type = 'NuScenesDataset'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 
-# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
-data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
+data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
+# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
 file_client_args = dict(backend='disk')
 
