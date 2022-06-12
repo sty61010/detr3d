@@ -3,6 +3,7 @@ from .detr import Deformable3DDetrTransformerDecoder
 from .detr3d_transformer import Detr3DTransformer, Detr3DTransformerDecoder, Detr3DCrossAtten
 from .deformable_detr3d_transformer import DeformableDetr3DTransformer
 from .dca import DeformableCrossAttention
+from .spatial_cross_attention import SpatialCrossAttention
 
 __all__ = ['DGCNNAttn', 'Deformable3DDetrTransformerDecoder',
            'Detr3DTransformer', 'Detr3DTransformerDecoder', 'Detr3DCrossAtten',

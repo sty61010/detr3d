@@ -53,6 +53,7 @@ class DeformableDetr3DHead(DETRHead):
         self.num_cls_fcs = num_cls_fcs - 1
         super(DeformableDetr3DHead, self).__init__(
             *args, transformer=transformer, **kwargs)
+        self.positional_encoding = None
         self.code_weights = nn.Parameter(torch.tensor(
             self.code_weights, requires_grad=False), requires_grad=False)
 
@@ -118,24 +119,26 @@ class DeformableDetr3DHead(DETRHead):
         """
 
         # Modified for deformable detr
-        batch_size = mlvl_feats[0].size(0)
-        input_img_h, input_img_w = mlvl_feats[0].shape[-2], mlvl_feats[0].shape[-1]
+        # batch_size = mlvl_feats[0].size(0)
+        # input_img_h, input_img_w = mlvl_feats[0].shape[-2], mlvl_feats[0].shape[-1]
         # print(f'input_img_h: {input_img_h}, input_img_w: {input_img_w}')
-        img_masks = mlvl_feats[0].new_ones(
-            (batch_size, input_img_h, input_img_w))
+        # img_masks = mlvl_feats[0].new_ones(
+        #     (batch_size, input_img_h, input_img_w))
         # print(f'img_masks: {img_masks.shape}')
 
         mlvl_masks = []
         mlvl_positional_encodings = []
-        for feat in mlvl_feats:
-            mlvl_masks.append(
-                F.interpolate(img_masks[None],
-                              size=feat.shape[-2:]).to(torch.bool).squeeze(0))
-            mlvl_positional_encodings.append(
-                self.positional_encoding(mlvl_masks[-1]))
+        # for feat in mlvl_feats:
+        #     mlvl_masks.append(
+        #         F.interpolate(img_masks[None],
+        #                       size=feat.shape[-2:]).to(torch.bool).squeeze(0))
+        #     mlvl_positional_encodings.append(
+        #         self.positional_encoding(mlvl_masks[-1]))
 
         query_embeds = self.query_embedding.weight
-
+        # hs: [num_layers, num_query, bs, embed_dims]
+        # init_reference: [bs, num_query, 3]
+        # inter_references: [num_layers, bs, num_query, 3]
         hs, init_reference, inter_references = self.transformer(
             mlvl_feats,
             mlvl_masks,
@@ -144,6 +147,7 @@ class DeformableDetr3DHead(DETRHead):
             reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
             img_metas=img_metas,
         )
+        # [num_layers, bs, num_query, embed_dims]
         hs = hs.permute(0, 2, 1, 3)
         outputs_classes = []
         outputs_coords = []
