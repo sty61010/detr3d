@@ -80,8 +80,10 @@ model = dict(
                 positional_encoding=dict(
                     type='LearnedPositionalEncoding',
                     num_feats=embed_dims // 2,
-                    row_num_embed=int((point_cloud_range[4] - point_cloud_range[1]) / grid_size[1]),
-                    col_num_embed=int((point_cloud_range[3] - point_cloud_range[0]) / grid_size[0]),
+                    row_num_embed=200,
+                    col_num_embed=200,
+                    # row_num_embed=int((point_cloud_range[4] - point_cloud_range[1]) / grid_size[1]),
+                    # col_num_embed=int((point_cloud_range[3] - point_cloud_range[0]) / grid_size[0]),
                 ),
                 transformerlayers=dict(
                     type='DeformableDetr3DTransformerLayer',
