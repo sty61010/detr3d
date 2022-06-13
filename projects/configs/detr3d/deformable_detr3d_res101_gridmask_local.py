@@ -9,8 +9,8 @@ _base_ = [
 # data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
 # data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
-# data_root = '/media/cytseng/ssd1/Datasets/nuscenes/v1.0-mini'
-data_root = '/media/cytseng/ssd1/Datasets/nuscenes/v1.0-trainval'
+# data_root = '/media/cytseng/ssd1/Datasets/nuscenes/v1.0-mini/'
+data_root = '/media/cytseng/ssd1/Datasets/nuscenes/v1.0-trainval/'
 
 db_sampler = dict(
     data_root=data_root,
