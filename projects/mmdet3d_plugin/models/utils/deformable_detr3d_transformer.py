@@ -155,20 +155,23 @@ class DeformableDetr3DTransformer(BaseModule):
                  pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
                  ** kwargs):
         super(DeformableDetr3DTransformer, self).__init__(**kwargs)
-        self.encoder = build_transformer_layer_sequence(encoder)
         self.decoder = build_transformer_layer_sequence(decoder)
         self.embed_dims = self.decoder.embed_dims
         self.num_feature_levels = num_feature_levels
         self.num_cams = num_cams
         self.two_stage_num_proposals = two_stage_num_proposals
 
-        """ Initialize grid for bev grid: [y_range, x_range, 2]
-            (last dimesion for x, y coordinate)
-        """
-        self.grid, self.normalized_grid_index = self.init_grid(grid_size=grid_size, pc_range=pc_range)
-        # bev_query: [y_range * x_range, C]
-        self.bev_query = nn.Embedding(self.grid.shape[0] * self.grid.shape[1],
-                                      self.embed_dims)
+        if encoder is not None:
+            self.encoder = build_transformer_layer_sequence(encoder)
+            """ Initialize grid for bev grid: [y_range, x_range, 2]
+                (last dimesion for x, y coordinate)
+            """
+            self.grid, self.normalized_grid_index = self.init_grid(grid_size=grid_size, pc_range=pc_range)
+            # bev_query: [y_range * x_range, C]
+            self.bev_query = nn.Embedding(self.grid.shape[0] * self.grid.shape[1],
+                                          self.embed_dims)
+        else:
+            self.encoder = None
 
         self.init_layers()
 
@@ -260,45 +263,44 @@ class DeformableDetr3DTransformer(BaseModule):
 
         # Check parameters
         bs = mlvl_feats[0].size(0)
-        # query_bev_pos: [y_range, x_range, 2] -> [y_range, x_range, bs, 2] -> [x_range * y_range, bs, 2]
-        query_bev_pos = self.grid.clone().unsqueeze(2).repeat_interleave(bs, 2).flatten(0, 1).to(mlvl_feats[0].device)
-
-        # bev_query: [y_range * x_range, C] -> [x_range * y_range, bs, C]
-        bev_query = self.bev_query.weight.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
-
-        # encoder
         ###
         # value[i]: [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C]
         # spatial_shapes: [num_levels, 2]
         # level_start_index: [num_levels, ]
         value, spatial_shapes, level_start_index = flatten_features(mlvl_feats)
-
-        # [y_range, x_range, 2] -> [y_range * x_range, 2] -> [bs, y_range * x_range, 2] -> [bs, y_range * x_range, 1, 2]
-        self_attn_reference_points = self.normalized_grid_index.flatten(0, 1).unsqueeze(
-            0).repeat_interleave(bs, 0).unsqueeze(2).to(mlvl_feats[0].device)
-
-        # [y_range * x_range, bs, embed_dims]
-        bev_memory = self.encoder(
-            query=bev_query,
-            value=value,
-            grid_shape=self.grid.shape[:2],
-            self_attn_args=dict(
-                reference_points=self_attn_reference_points,
-                spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
-                level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]])
-            ),
-            cross_attn_args=dict(
-                query_bev_pos=query_bev_pos,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-            ),
-            img_metas=img_metas,
-        )
-        # print(f'bev_memory: {bev_memory.shape}')
-
         ###
+        # encoder
+        if self.encoder is not None:
 
-        # Modified from only decoder
+            # query_bev_pos: [y_range, x_range, 2] -> [y_range, x_range, bs, 2] -> [x_range * y_range, bs, 2]
+            query_bev_pos = self.grid.clone().unsqueeze(2).repeat_interleave(
+                bs, 2).flatten(0, 1).to(mlvl_feats[0].device)
+
+            # bev_query: [y_range * x_range, C] -> [x_range * y_range, bs, C]
+            bev_query = self.bev_query.weight.unsqueeze(1).repeat_interleave(bs, 1).to(mlvl_feats[0].device)
+
+            # [y_range, x_range, 2] -> [y_range * x_range, 2] -> [bs, y_range * x_range, 2] -> [bs, y_range * x_range, 1, 2]
+            self_attn_reference_points = self.normalized_grid_index.flatten(0, 1).unsqueeze(
+                0).repeat_interleave(bs, 0).unsqueeze(2).to(mlvl_feats[0].device)
+
+            # [y_range * x_range, bs, embed_dims]
+            bev_memory = self.encoder(
+                query=bev_query,
+                value=value,
+                grid_shape=self.grid.shape[:2],
+                self_attn_args=dict(
+                    reference_points=self_attn_reference_points,
+                    spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
+                    level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]])
+                ),
+                cross_attn_args=dict(
+                    query_bev_pos=query_bev_pos,
+                    spatial_shapes=spatial_shapes,
+                    level_start_index=level_start_index,
+                ),
+                img_metas=img_metas,
+            )
+            # print(f'bev_memory: {bev_memory.shape}')
 
         # query: [num_query, bs, embed_dims]
         # query_pos: [num_query, bs, embed_dims]
@@ -309,33 +311,41 @@ class DeformableDetr3DTransformer(BaseModule):
         reference_points = self.reference_points(query_pos).sigmoid().transpose(0, 1)
         init_reference_out = reference_points
 
-        # inter_states: [num_cameras, num_query, bs, embed_dims]
-        # inter_references: [num_cameras, bs, num_query, 3]
-        inter_states, inter_references = self.decoder(
-            query=query,
-            key=None,
-            value=bev_memory,
-            query_pos=query_pos,
-            reference_points=reference_points,
-            spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
-            level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]]),
-            reg_branches=reg_branches,
-            **kwargs
-        )
+        ###
+        # decoder
+        # Modified from only decoder
+        if self.encoder is not None:
+            # inter_states: [num_cameras, num_query, bs, embed_dims]
+            # inter_references: [num_cameras, bs, num_query, 3]
+            inter_states, inter_references = self.decoder(
+                query=query,
+                key=None,
+                value=bev_memory,
+                query_pos=query_pos,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes.new_tensor([[self.grid.shape[0], self.grid.shape[1]]]),
+                level_start_index=level_start_index.new_tensor([0, self.grid.shape[0] * self.grid.shape[1]]),
+                reg_branches=reg_branches,
+                only_decoder=False,
+                **kwargs
+            )
+        else:
+            inter_states, inter_references = self.decoder(
+                query=query,
+                key=None,
+                value=value,
+                query_pos=query_pos,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                reg_branches=reg_branches,
+                img_metas=img_metas,
+                only_decoder=True,
+                **kwargs
+            )
+
         # print(f'inter_states: {inter_states.shape}')
         # print(f'inter_references: {inter_references.shape}')
-        # inter_states, inter_references = self.decoder(
-        # query=query,
-        # key=None,
-        # value=value,
-        # query_pos=query_pos,
-        # mlvl_feats=mlvl_feats,
-        # reference_points=reference_points,
-        # spatial_shapes=spatial_shapes,
-        # level_start_index=level_start_index,
-        # reg_branches=reg_branches,
-        # img_metas=img_metas,
-        # **kwargs)
 
         inter_references_out = inter_references
         return inter_states, init_reference_out, inter_references_out
@@ -530,6 +540,7 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
         spatial_shapes: Tensor,
         level_start_index: Tensor,
         reg_branches: Optional[nn.Module] = None,
+        only_decoder: bool = False,
         **kwargs
     ):
         """Forward function for `DeformableDetr3DTransformerDecoder`.
@@ -556,14 +567,24 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
         intermediate_reference_points = []
         for lid, layer in enumerate(self.layers):
             reference_points_input = reference_points
-            output = layer(
-                output,
-                key=key,
-                value=value,
-                reference_points=reference_points_input[..., None, :2],
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-                **kwargs)
+            if only_decoder is True:
+                output = layer(
+                    output,
+                    key=key,
+                    value=value,
+                    reference_points=reference_points_input,
+                    spatial_shapes=spatial_shapes,
+                    level_start_index=level_start_index,
+                    **kwargs)
+            else:
+                output = layer(
+                    output,
+                    key=key,
+                    value=value,
+                    reference_points=reference_points_input[..., None, :2],
+                    spatial_shapes=spatial_shapes,
+                    level_start_index=level_start_index,
+                    **kwargs)
             output = output.permute(1, 0, 2)
 
             if reg_branches is not None:
@@ -590,4 +611,7 @@ class DeformableDetr3DTransformerDecoder(TransformerLayerSequence):
             return torch.stack(intermediate), torch.stack(
                 intermediate_reference_points)
 
-        return output.unsqueeze(0), reference_points.unsqueeze(0)
+        if only_decoder is True:
+            return output, reference_points
+        else:
+            return output.unsqueeze(0), reference_points.unsqueeze(0)

@@ -28,6 +28,8 @@ def inverse_sigmoid(x, eps=1e-5):
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
     return torch.log(x1 / x2)
+
+
 @ATTENTION.register_module()
 class DeformableCrossAttention(BaseModule):
     """An DeformableCrossAttention module used in DeformableDetr3DTransformerDecoder. 
@@ -89,7 +91,7 @@ class DeformableCrossAttention(BaseModule):
         )
         self.batch_first = batch_first
 
-        # Modifirf for DeformableCrossAttention
+        # Modified for DeformableCrossAttention
         self.attention = build_attention(attn_cfg)
 
         self.init_weight()
@@ -240,6 +242,7 @@ class DeformableCrossAttention(BaseModule):
         reference_points = reference_points * (pc_max - pc_min) + pc_min
         # reference_points: [B, num_query, num_levels, 3]
         reference_points = reference_points.unsqueeze(2).repeat_interleave(num_levels, dim=2)
+        # print(f'reference_points: {reference_points.shape}')
 
         # lidar2img: [B, num_cameras, 4, 4]
         lidar2img = query.new_tensor([img_meta['lidar2img'] for img_meta in img_metas])
