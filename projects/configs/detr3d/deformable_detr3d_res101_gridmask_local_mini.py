@@ -1,5 +1,5 @@
 _base_ = [
-    './deformable_detr3d_res101_gridmask.py',
+    './deformable_decoder_detr3d_res101_gridmask.py',
 ]
 
 
