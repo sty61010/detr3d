@@ -259,7 +259,7 @@ test_pipeline = [
         ])
 ]
 
-data_length = 6000
+data_length = 50000
 data = dict(
     samples_per_gpu=1,
     workers_per_gpu=4,
@@ -288,7 +288,8 @@ data = dict(
         ann_file=data_root + 'nuscenes_infos_val.pkl',
         pipeline=test_pipeline,
         classes=class_names,
-        modality=input_modality))
+        modality=input_modality)
+)
 
 optimizer = dict(
     type='AdamW',

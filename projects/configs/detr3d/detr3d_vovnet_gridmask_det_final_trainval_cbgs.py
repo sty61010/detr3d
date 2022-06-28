@@ -3,8 +3,8 @@ _base_ = [
     '../../../mmdetection3d/configs/_base_/default_runtime.py'
 ]
 
-plugin=True
-plugin_dir='projects/mmdet3d_plugin/'
+plugin = True
+plugin_dir = 'projects/mmdet3d_plugin/'
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
@@ -83,7 +83,7 @@ model = dict(
             pc_range=point_cloud_range,
             max_num=300,
             voxel_size=voxel_size,
-            num_classes=10), 
+            num_classes=10),
         positional_encoding=dict(
             type='SinePositionalEncoding',
             num_feats=128,
@@ -107,7 +107,7 @@ model = dict(
             type='HungarianAssigner3D',
             cls_cost=dict(type='FocalLossCost', weight=2.0),
             reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
-            iou_cost=dict(type='IoUCost', weight=0.0), # Fake cost. This is just to make it compatible with DETR head. 
+            iou_cost=dict(type='IoUCost', weight=0.0),  # Fake cost. This is just to make it compatible with DETR head.
             pc_range=point_cloud_range))))
 
 dataset_type = 'NuScenesDataset'
@@ -203,7 +203,7 @@ data = dict(
     test=dict(pipeline=test_pipeline, classes=class_names, modality=input_modality))
 
 optimizer = dict(
-    type='AdamW', 
+    type='AdamW',
     lr=2e-4,
     paramwise_cfg=dict(
         custom_keys={
@@ -222,6 +222,6 @@ total_epochs = 24
 evaluation = dict(interval=2, pipeline=test_pipeline)
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-load_from='ckpts/dd3d_det_final.pth'
+load_from = 'ckpts/dd3d_det_final.pth'
 
-find_unused_parameters=True
+find_unused_parameters = True
