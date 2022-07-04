@@ -3,15 +3,17 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from mmcv.cnn import Linear, bias_init_with_prob
 from mmcv.runner import force_fp32
 
-from mmdet.core import (multi_apply, multi_apply, reduce_mean)
+from mmdet.core import (multi_apply, reduce_mean)
 from mmdet.models.utils.transformer import inverse_sigmoid
 from mmdet.models import HEADS
 from mmdet.models.dense_heads import DETRHead
 from mmdet3d.core.bbox.coders import build_bbox_coder
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
+from mmdet3d.models.builder import build_neck
 
 
 @HEADS.register_module()
@@ -34,7 +36,8 @@ class DeformableDetr3DHead(DETRHead):
                  bbox_coder=None,
                  num_cls_fcs=2,
                  code_weights=None,
-                 **kwargs):
+                 depth_predictor=None,
+                 ** kwargs):
         self.with_box_refine = with_box_refine
         self.as_two_stage = as_two_stage
         if self.as_two_stage:
@@ -56,6 +59,8 @@ class DeformableDetr3DHead(DETRHead):
         self.positional_encoding = None
         self.code_weights = nn.Parameter(torch.tensor(
             self.code_weights, requires_grad=False), requires_grad=False)
+
+        # self.depth_predictor = build_neck(depth_predictor)
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -119,23 +124,55 @@ class DeformableDetr3DHead(DETRHead):
         """
 
         # Modified for deformable detr
-        # batch_size = mlvl_feats[0].size(0)
+        # mlvl_feats: (tuple[Tensor]): [bs, num_cams, C, H, W]
+        batch_size, num_cams, C, H, W = mlvl_feats[0].size()
+        # for feat in mlvl_feats:
+        #     print(f'feat: {feat.shape}')
+
+        # [input_img_h, input_img_w]: pad_shape: [H, W]
         # input_img_h, input_img_w = mlvl_feats[0].shape[-2], mlvl_feats[0].shape[-1]
+        input_img_h, input_img_w, _ = img_metas[0]['pad_shape'][0]
         # print(f'input_img_h: {input_img_h}, input_img_w: {input_img_w}')
+
+        # img_masks: [bs, num_cams, H, W]
         # img_masks = mlvl_feats[0].new_ones(
         #     (batch_size, input_img_h, input_img_w))
+        img_masks = mlvl_feats[0].new_ones(
+            (batch_size, num_cams, input_img_h, input_img_w))
         # print(f'img_masks: {img_masks.shape}')
 
+        # for img_id in range(batch_size):
+        #     img_h, img_w, _ = img_metas[img_id]['img_shape']
+        #     img_masks[img_id, :img_h, :img_w] = 0
+        for img_id in range(batch_size):
+            for cam_id in range(num_cams):
+                img_h, img_w, _ = img_metas[img_id]['img_shape'][cam_id]
+                img_masks[img_id, cam_id, :img_h, :img_w] = 0
+
+        # mlvl_masks (tuple[Tensor]): [bs, num_cams, H, W]
         mlvl_masks = []
         mlvl_positional_encodings = []
-        # for feat in mlvl_feats:
-        #     mlvl_masks.append(
-        #         F.interpolate(img_masks[None],
-        #                       size=feat.shape[-2:]).to(torch.bool).squeeze(0))
+
+        for feat in mlvl_feats:
+            mlvl_masks.append(
+                F.interpolate(img_masks,
+                              size=feat.shape[-2:]).to(torch.bool))
+            # mlvl_masks.append(
+            #     F.interpolate(img_masks[None],
+            #                   size=feat.shape[-2:]).to(torch.bool).squeeze(0))
         #     mlvl_positional_encodings.append(
         #         self.positional_encoding(mlvl_masks[-1]))
 
+        # for mask in mlvl_masks:
+        #     print(f'mask: {mask.shape}')
+
         query_embeds = self.query_embedding.weight
+
+        # pred_depth_map_logits: [B, N, D, H, W]
+        # depth_pos_embed: [B, N, C, H, W]
+        # weighted_depth: [B, N, H, W]
+        # pred_depth_map_logits, depth_pos_embed, weighted_depth = self.depth_predictor(mlvl_feats)
+
         # hs: [num_layers, num_query, bs, embed_dims]
         # init_reference: [bs, num_query, 3]
         # inter_references: [num_layers, bs, num_query, 3]
@@ -147,8 +184,11 @@ class DeformableDetr3DHead(DETRHead):
             reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
             img_metas=img_metas,
         )
-        # [num_layers, bs, num_query, embed_dims]
+        # hs: [num_layers, bs, num_query, embed_dims]
         hs = hs.permute(0, 2, 1, 3)
+        # hs: [num_layers, bs, num_query, embed_dims] without nan to avoid numeric errors
+        hs = torch.nan_to_num(hs)
+
         outputs_classes = []
         outputs_coords = []
 

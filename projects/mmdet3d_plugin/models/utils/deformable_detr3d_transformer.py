@@ -1,13 +1,10 @@
 import warnings
 import copy
-import numpy as np
 import torch
 from torch import Tensor
 import torch.nn as nn
-import torch.nn.functional as F
-from mmcv.cnn import xavier_init, constant_init
-from mmcv.cnn.bricks.registry import (ATTENTION,
-                                      TRANSFORMER_LAYER,
+from mmcv.cnn import xavier_init
+from mmcv.cnn.bricks.registry import (TRANSFORMER_LAYER,
                                       TRANSFORMER_LAYER_SEQUENCE)
 from mmcv.cnn.bricks.transformer import (BaseTransformerLayer,
                                          MultiScaleDeformableAttention,
@@ -18,12 +15,10 @@ from mmcv.cnn.bricks.transformer import (BaseTransformerLayer,
 from mmcv.runner.base_module import BaseModule
 
 from mmdet.models.utils.builder import TRANSFORMER
-from torch.nn.init import normal_
 from typing import Any, Dict, List, Optional, Tuple
 
 from .detr3d_transformer import Detr3DCrossAtten
 from .dca import DeformableCrossAttention
-from .spatial_cross_attention import SpatialCrossAttention
 
 
 def inverse_sigmoid(x: Tensor, eps: float = 1e-5):
@@ -264,10 +259,11 @@ class DeformableDetr3DTransformer(BaseModule):
         # Check parameters
         bs = mlvl_feats[0].size(0)
         ###
-        # value[i]: [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C]
+        # value: [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C]
         # spatial_shapes: [num_levels, 2]
         # level_start_index: [num_levels, ]
         value, spatial_shapes, level_start_index = flatten_features(mlvl_feats)
+
         ###
         # encoder
         if self.encoder is not None:

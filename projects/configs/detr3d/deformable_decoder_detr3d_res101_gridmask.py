@@ -1,6 +1,6 @@
 _base_ = [
-    '../../../../mmdetection3d/configs/_base_/datasets/nus-3d.py',
-    '../../../../mmdetection3d/configs/_base_/default_runtime.py'
+    '../../../mmdetection3d/configs/_base_/datasets/nus-3d.py',
+    '../../../mmdetection3d/configs/_base_/default_runtime.py'
 ]
 
 plugin = True
@@ -37,7 +37,7 @@ model = dict(
     use_grid_mask=True,
     img_backbone=dict(
         type='ResNet',
-        depth=101,
+        depth=50,
         num_stages=4,
         # out_indices=(1, 2, 3),
         out_indices=(0, 1, 2, 3),
@@ -64,6 +64,33 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
+        depth_predictor=dict(
+            type='DepthPredictor',
+            num_depth_bins=80,
+            depth_min=1e-3,
+            depth_max=60.0,
+            embed_dims=embed_dims,
+            encoder=dict(
+                type='DetrTransformerEncoder',
+                num_layers=3,
+                transformerlayers=dict(
+                    type='BaseTransformerLayer',
+                    attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1)
+                    ],
+                    feedforward_channels=256,
+                    ffn_dropout=0.1,
+                    operation_order=(
+                        'self_attn', 'norm',
+                        'ffn', 'norm',
+                    )
+                )
+            ),
+        ),
         transformer=dict(
             type='DeformableDetr3DTransformer',
             grid_size=grid_size,
@@ -111,22 +138,25 @@ model = dict(
             # ),
             decoder=dict(
                 type='DeformableDetr3DTransformerDecoder',
-                num_layers=6,
+                num_layers=3,
                 return_intermediate=True,
                 transformerlayers=dict(
-                    type='BaseTransformerLayer',
+                    # type='BaseTransformerLayer',
+                    type='DepthCrossDecoderLayer',
+
                     attn_cfgs=[
+                        # dict(
+                        #     type='MultiheadAttention',
+                        #     embed_dims=embed_dims,
+                        #     num_heads=8,
+                        #     dropout=0.1,
+                        # ),
                         dict(
                             type='MultiheadAttention',
                             embed_dims=embed_dims,
                             num_heads=8,
                             dropout=0.1,
                         ),
-                        # dict(
-                        #     type='MultiScaleDeformableAttention',
-                        #     num_levels=1,  # the number of levels of bev features
-                        #     embed_dims=embed_dims,
-                        # ),
                         dict(
                             type='DeformableCrossAttention',
                             attn_cfg=dict(
@@ -147,8 +177,9 @@ model = dict(
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
+                        # 'depth_cross_attn', 'norm',
                         'self_attn', 'norm',
-                        'cross_attn', 'norm',
+                        'spatial_cross_attn', 'norm',
                         'ffn', 'norm',
                     )
                 )
@@ -182,15 +213,19 @@ model = dict(
             iou_cost=dict(type='IoUCost', weight=0.0),  # Fake cost. This is just to make it compatible with DETR head.
             pc_range=point_cloud_range))))
 
-dataset_type = 'NuScenesDataset'
+dataset_type = 'CustomNuScenesDataset'
 
 
-# data_root = '/home/master/10/cytseng/mmdetection3d/data/nuscenes/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 
 # data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
 data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
+
+# data_root = '/mnt/ssd1/Datasets/nuscenes/v1.0-mini/'
+# data_root = '/mnt/ssd1/Datasets/nuscenes/v1.0-trainval/'
+
+# data_root = 'data/nuscenes/'
 
 file_client_args = dict(backend='disk')
 
@@ -230,12 +265,27 @@ db_sampler = dict(
         use_dim=[0, 1, 2, 3, 4],
         file_client_args=file_client_args))
 
+ida_aug_conf = {
+    "resize_lim": (0.47, 0.625),
+    "final_dim": (320, 800),
+    "bot_pct_lim": (0.0, 0.0),
+    "rot_lim": (0.0, 0.0),
+    "H": 900,
+    "W": 1600,
+    # "rand_flip": True,
+    "rand_flip": False,
+}
+
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='PhotoMetricDistortionMultiViewImage'),
+    # dict(type='PhotoMetricDistortionMultiViewImage'),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
+
+    dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=True),
+
+
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
@@ -275,7 +325,7 @@ data = dict(
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
         box_type_3d='LiDAR',
-        data_length=data_length,
+        # data_length=data_length,
     ),
     val=dict(
         data_root=data_root,
