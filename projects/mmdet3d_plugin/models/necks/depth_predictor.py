@@ -21,6 +21,7 @@ class DepthPredictor(nn.Module):
                  depth_max=60.0,
                  embed_dims=256,
                  encoder=None,
+                 num_levels=4,
                  ):
         """
         Initialize depth predictor and depth encoder
@@ -70,6 +71,8 @@ class DepthPredictor(nn.Module):
 
         self.depth_pos_embed = nn.Embedding(int(self.depth_max) + 1, 256)
 
+        self.num_levels = num_levels
+
     def forward(self,
                 mlvl_feats,
                 mask=None,
@@ -87,7 +90,7 @@ class DepthPredictor(nn.Module):
                 head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
                 Shape [nb_dec, bs, num_query, 9].
         """
-        assert len(mlvl_feats) == 4
+        assert len(mlvl_feats) == self.num_levels
         # mlvl_feats (tuple[Tensor]): [B, N, C, H, W]
         B, N, C, H, W = mlvl_feats[0].shape
         print(f'mlvl_feats: {mlvl_feats[0].shape}')
@@ -124,11 +127,11 @@ class DepthPredictor(nn.Module):
         depth_embed = depth_embed + depth_pos_embed_ip
 
         # # depth_logits: [B, N, D, H, W]
-        # depth_logits = depth_logits.reshape(B, N, -1, H, W)
+        depth_logits = depth_logits.reshape(B, N, -1, H, W)
         # # depth_embed: [B, N, C, H, W]
-        # depth_embed = depth_embed.reshape(B, N, -1, H, W)
+        depth_embed = depth_embed.reshape(B, N, -1, H, W)
         # # weighted_depth: [B, N, H, W]
-        # weighted_depth = weighted_depth.reshape(B, N, H, W)
+        weighted_depth = weighted_depth.reshape(B, N, H, W)
 
         print(f'depth_logits: {depth_logits.shape}')
         print(f'depth_embed: {depth_embed.shape}')

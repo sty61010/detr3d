@@ -59,8 +59,10 @@ class DeformableDetr3DHead(DETRHead):
         self.positional_encoding = None
         self.code_weights = nn.Parameter(torch.tensor(
             self.code_weights, requires_grad=False), requires_grad=False)
-
-        # self.depth_predictor = build_neck(depth_predictor)
+        if depth_predictor is not None:
+            self.depth_predictor = build_neck(depth_predictor)
+        else:
+            self.depth_predictor = None
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -168,21 +170,24 @@ class DeformableDetr3DHead(DETRHead):
 
         query_embeds = self.query_embedding.weight
 
-        # pred_depth_map_logits: [B, N, D, H, W]
-        # depth_pos_embed: [B, N, C, H, W]
-        # weighted_depth: [B, N, H, W]
-        # pred_depth_map_logits, depth_pos_embed, weighted_depth = self.depth_predictor(mlvl_feats)
+        depth_pos_embed = None
+        if self.depth_predictor is not None:
+            # pred_depth_map_logits: [B, N, D, H, W]
+            # depth_pos_embed: [B, N, C, H, W]
+            # weighted_depth: [B, N, H, W]
+            pred_depth_map_logits, depth_pos_embed, weighted_depth = self.depth_predictor(mlvl_feats)
 
         # hs: [num_layers, num_query, bs, embed_dims]
         # init_reference: [bs, num_query, 3]
         # inter_references: [num_layers, bs, num_query, 3]
         hs, init_reference, inter_references = self.transformer(
-            mlvl_feats,
-            mlvl_masks,
-            query_embeds,
-            mlvl_positional_encodings,
+            mlvl_feats=mlvl_feats,
+            mlvl_masks=mlvl_masks,
+            query_embed=query_embeds,
+            mlvl_pos_embeds=mlvl_positional_encodings,
             reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
             img_metas=img_metas,
+            depth_pos_embed=depth_pos_embed,
         )
         # hs: [num_layers, bs, num_query, embed_dims]
         hs = hs.permute(0, 2, 1, 3)

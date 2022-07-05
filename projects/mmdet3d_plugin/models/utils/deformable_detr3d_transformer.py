@@ -226,7 +226,8 @@ class DeformableDetr3DTransformer(BaseModule):
                 mlvl_pos_embeds,
                 img_metas,
                 reg_branches=None,
-                **kwargs):
+                depth_pos_embed=None,
+                ** kwargs):
         """Forward function for `DeformableDetr3DTransformer`.
         Args:
             mlvl_feats (list(Tensor)): Input queries from

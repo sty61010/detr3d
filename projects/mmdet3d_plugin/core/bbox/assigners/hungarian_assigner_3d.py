@@ -1,5 +1,5 @@
 import torch
-
+import numpy as np
 from mmdet.core.bbox.builder import BBOX_ASSIGNERS
 from mmdet.core.bbox.assigners import AssignResult
 from mmdet.core.bbox.assigners import BaseAssigner
@@ -11,6 +11,30 @@ try:
     from scipy.optimize import linear_sum_assignment
 except ImportError:
     linear_sum_assignment = None
+
+
+def linear_sum_assignment_with_inf(cost_matrix):
+    cost_matrix = np.asarray(cost_matrix)
+    min_inf = np.isneginf(cost_matrix).any()
+    max_inf = np.isposinf(cost_matrix).any()
+    if min_inf and max_inf:
+        raise ValueError("matrix contains both inf and -inf")
+
+    if min_inf or max_inf:
+        values = cost_matrix[~np.isinf(cost_matrix)]
+        m = values.min()
+        M = values.max()
+        n = min(cost_matrix.shape)
+        # strictly positive constant even when added
+        # to elements of the cost matrix
+        positive = n * (M - m + np.abs(M) + np.abs(m) + 1)
+        if max_inf:
+            place_holder = (M + (n - 1) * (M - m)) + positive
+        if min_inf:
+            place_holder = (m + (n - 1) * (m - M)) - positive
+
+        cost_matrix[np.isinf(cost_matrix)] = place_holder
+    return linear_sum_assignment(cost_matrix)
 
 
 @BBOX_ASSIGNERS.register_module()
@@ -52,7 +76,7 @@ class HungarianAssigner3D(BaseAssigner):
     def assign(self,
                bbox_pred,
                cls_pred,
-               gt_bboxes, 
+               gt_bboxes,
                gt_labels,
                gt_bboxes_ignore=None,
                eps=1e-7):
@@ -109,16 +133,18 @@ class HungarianAssigner3D(BaseAssigner):
         # regression L1 cost
         normalized_gt_bboxes = normalize_bbox(gt_bboxes, self.pc_range)
         reg_cost = self.reg_cost(bbox_pred[:, :8], normalized_gt_bboxes[:, :8])
-      
+
         # weighted sum of above two costs
         cost = cls_cost + reg_cost
-        
+
         # 3. do Hungarian matching on CPU using linear_sum_assignment
         cost = cost.detach().cpu()
         if linear_sum_assignment is None:
             raise ImportError('Please run "pip install scipy" '
                               'to install scipy first.')
-        matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
+        # matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
+        matched_row_inds, matched_col_inds = linear_sum_assignment_with_inf(cost)
+
         matched_row_inds = torch.from_numpy(matched_row_inds).to(
             bbox_pred.device)
         matched_col_inds = torch.from_numpy(matched_col_inds).to(

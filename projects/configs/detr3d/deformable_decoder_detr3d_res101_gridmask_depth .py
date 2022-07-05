@@ -67,34 +67,34 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
-        # depth_predictor=dict(
-        #     type='DepthPredictor',
-        #     num_depth_bins=80,
-        #     depth_min=1e-3,
-        #     depth_max=60.0,
-        #     embed_dims=embed_dims,
-        #     num_levels=num_levels,
-        #     encoder=dict(
-        #         type='DetrTransformerEncoder',
-        #         num_layers=3,
-        #         transformerlayers=dict(
-        #             type='BaseTransformerLayer',
-        #             attn_cfgs=[
-        #                 dict(
-        #                     type='MultiheadAttention',
-        #                     embed_dims=embed_dims,
-        #                     num_heads=8,
-        #                     dropout=0.1)
-        #             ],
-        #             feedforward_channels=256,
-        #             ffn_dropout=0.1,
-        #             operation_order=(
-        #                 'self_attn', 'norm',
-        #                 'ffn', 'norm',
-        #             )
-        #         )
-        #     ),
-        # ),
+        depth_predictor=dict(
+            type='DepthPredictor',
+            num_depth_bins=80,
+            depth_min=1e-3,
+            depth_max=60.0,
+            embed_dims=embed_dims,
+            num_levels=num_levels,
+            encoder=dict(
+                type='DetrTransformerEncoder',
+                num_layers=3,
+                transformerlayers=dict(
+                    type='BaseTransformerLayer',
+                    attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1)
+                    ],
+                    feedforward_channels=256,
+                    ffn_dropout=0.1,
+                    operation_order=(
+                        'self_attn', 'norm',
+                        'ffn', 'norm',
+                    )
+                )
+            ),
+        ),
         transformer=dict(
             type='DeformableDetr3DTransformer',
             grid_size=grid_size,
