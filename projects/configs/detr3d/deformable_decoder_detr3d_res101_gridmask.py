@@ -220,12 +220,12 @@ dataset_type = 'CustomNuScenesDataset'
 # data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
 
 # data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
-data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
+# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
 
 # data_root = '/mnt/ssd1/Datasets/nuscenes/v1.0-mini/'
 # data_root = '/mnt/ssd1/Datasets/nuscenes/v1.0-trainval/'
 
-# data_root = 'data/nuscenes/'
+data_root = 'data/nuscenes/'
 
 file_client_args = dict(backend='disk')
 
