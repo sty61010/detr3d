@@ -93,7 +93,7 @@ class DepthPredictor(nn.Module):
         assert len(mlvl_feats) == self.num_levels
         # mlvl_feats (tuple[Tensor]): [B, N, C, H, W]
         B, N, C, H, W = mlvl_feats[0].shape
-        print(f'mlvl_feats: {mlvl_feats[0].shape}')
+        # print(f'mlvl_feats: {mlvl_feats[0].shape}')
 
         # flatten_feats (tuple[Tensor]): [B*N, C, H, W]
         flatten_feats = []
@@ -112,7 +112,7 @@ class DepthPredictor(nn.Module):
         depth_probs = F.softmax(depth_logits, dim=1)
         weighted_depth = (depth_probs * self.depth_bin_values.reshape(1, -1, 1, 1)).sum(dim=1)
 
-        print(f'src: {src.shape}')
+        # print(f'src: {src.shape}')
 
         # depth embeddings with depth positional encodings
         BN, C, H, W = src.shape
@@ -133,9 +133,9 @@ class DepthPredictor(nn.Module):
         # # weighted_depth: [B, N, H, W]
         weighted_depth = weighted_depth.reshape(B, N, H, W)
 
-        print(f'depth_logits: {depth_logits.shape}')
-        print(f'depth_embed: {depth_embed.shape}')
-        print(f'weighted_depth: {weighted_depth.shape}')
+        # print(f'depth_logits: {depth_logits.shape}')
+        # print(f'depth_embed: {depth_embed.shape}')
+        # print(f'weighted_depth: {weighted_depth.shape}')
 
         return depth_logits, depth_embed, weighted_depth
 

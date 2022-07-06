@@ -167,12 +167,13 @@ model = dict(
                             embed_dims=embed_dims
                         ),
 
-                        # dict(
-                        #     type='MultiheadAttention',
-                        #     embed_dims=embed_dims,
-                        #     num_heads=8,
-                        #     dropout=0.1,
-                        # ),
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1,
+                        ),
+
                         # dict(
                         #     type='Detr3DCrossAtten',
                         #     pc_range=point_cloud_range,
@@ -184,7 +185,7 @@ model = dict(
                     operation_order=(
                         'self_attn', 'norm',
                         'spatial_cross_attn', 'norm',
-                        # 'depth_cross_attn', 'norm',
+                        'depth_cross_attn', 'norm',
                         'ffn', 'norm',
                     )
                 )

@@ -308,6 +308,13 @@ class DeformableDetr3DTransformer(BaseModule):
         reference_points = self.reference_points(query_pos).sigmoid().transpose(0, 1)
         init_reference_out = reference_points
 
+        # depth
+        if depth_pos_embed is not None:
+            # depth_pos_embed: [B, N, C, H, W] -> [B, C, N, H, W]
+            depth_pos_embed = depth_pos_embed.permute(0, 2, 1, 3, 4)
+            # depth_pos_embed: [B, C, N, H, W] -> [B, C, N*H*W] -> [N*H*W, B, C]
+            depth_pos_embed = depth_pos_embed.flatten(2).permute(2, 0, 1)
+
         ###
         # decoder
         # Modified from only decoder
@@ -338,6 +345,7 @@ class DeformableDetr3DTransformer(BaseModule):
                 reg_branches=reg_branches,
                 img_metas=img_metas,
                 only_decoder=True,
+                depth_pos_embed=depth_pos_embed,
                 **kwargs
             )
 

@@ -162,6 +162,7 @@ class DepthCrossDecoderLayer(BaseModule):
                 key_padding_mask: Optional[Tensor] = None,
                 self_attn_args=dict(),
                 cross_attn_args=dict(),
+                depth_pos_embed: Optional[Tensor] = None,
                 **kwargs):
         """Forward function for `TransformerDecoderLayer`.
 
@@ -260,17 +261,16 @@ class DepthCrossDecoderLayer(BaseModule):
                 identity = query
 
             elif layer == 'depth_cross_attn':
-                temp_key = temp_value = query
+                key = value = depth_pos_embed
                 query = self.attentions[attn_index](
                     query,
-                    temp_key,
-                    temp_value,
+                    key,
+                    value,
                     identity if self.pre_norm else None,
                     query_pos=query_pos,
-                    key_pos=query_pos,
+                    key_pos=key_pos,
                     attn_mask=attn_masks[attn_index],
-                    key_padding_mask=query_key_padding_mask,
-                    **self_attn_args,
+                    key_padding_mask=key_padding_mask,
                     **kwargs)
                 attn_index += 1
                 identity = query
