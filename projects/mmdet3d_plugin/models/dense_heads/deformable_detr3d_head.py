@@ -1,4 +1,6 @@
 import copy
+from typing import Dict, List, Tuple, Union
+from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 
 import torch
 import torch.nn as nn
@@ -12,6 +14,7 @@ from mmdet.models import HEADS
 from mmdet.models.dense_heads import DETRHead
 from mmdet3d.core.bbox.coders import build_bbox_coder
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
+from projects.mmdet3d_plugin.models.utils import depth_utils
 
 
 @HEADS.register_module()
@@ -34,6 +37,7 @@ class DeformableDetr3DHead(DETRHead):
                  bbox_coder=None,
                  num_cls_fcs=2,
                  code_weights=None,
+                 depth_bin_cfg: Dict[str, Union[float, int, str]] = dict(),
                  **kwargs):
         self.with_box_refine = with_box_refine
         self.as_two_stage = as_two_stage
@@ -56,6 +60,7 @@ class DeformableDetr3DHead(DETRHead):
         self.positional_encoding = None
         self.code_weights = nn.Parameter(torch.tensor(
             self.code_weights, requires_grad=False), requires_grad=False)
+        self.depth_bin_cfg = depth_bin_cfg
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -293,6 +298,100 @@ class DeformableDetr3DHead(DETRHead):
         return (labels_list, label_weights_list, bbox_targets_list,
                 bbox_weights_list, num_total_pos, num_total_neg)
 
+    def get_depth_map_and_gt_bboxes_2d(self,
+                                       gt_bboxes_list: List[LiDARInstance3DBoxes],
+                                       img_metas: List[Dict[str, torch.Tensor]],
+                                       depth_maps_shape: Tuple[int]) -> Tuple[torch.Tensor, List[List[torch.Tensor]]]:
+        """Get depth map and the 2D ground truth bboxes.
+
+        Args:
+            gt_bboxes_list: The ground truth list of `LiDARInstance3DBoxes`.
+            img_metas: A list of dict containing the `lidar2img` tensor.
+            depth_maps_shape: The shape (height, width) of the depth map.
+
+        Returns:
+            gt_depth_maps: Thr ground truth depth maps with shape 
+                [batch, num_cameras, depth_map_H, depth_map_W, num_depth_bins].
+            gt_bboxes_2d: A list of list of tensor containing 2D ground truth bboxes (x, y, w, h)
+                for each sample and each camera. Each tensor has shape [N_i, 4].
+                Below is the brief explanation of a single batch:
+                [[gt_bboxes_tensor_camera_0, gt_bboxes_tensor_camera_1, ..., gt_bboxes_tensor_camera_n] (sample 0),
+                 [gt_bboxes_tensor_camera_0, gt_bboxes_tensor_camera_1, ..., gt_bboxes_tensor_camera_n] (sample 1),
+                 ...].
+        """
+        img_H, img_W = img_metas[0]['img_shape'][0]
+        depth_map_H, depth_map_W = depth_maps_shape
+        gt_depth_maps = []
+        gt_bboxes_2d = []
+        for gt_bboxes, img_meta in zip(gt_bboxes_list, img_metas):
+            # [num_objects, 8, 3]
+            gt_bboxes_corners = gt_bboxes.corners
+            # [num_objects, 3].
+            gt_bboxes_centers = gt_bboxes.gravity_center
+            # [num_cameras, 3, 4]
+            lidar2img = img_meta['lidar2img'].to(gt_bboxes_corners.device)[:, :3]
+            assert tuple(lidar2img.shape) == (6, 3, 4)
+
+            # convert to homogeneous coordinate. [num_objects, 8, 4]
+            gt_bboxes_corners = torch.cat([
+                gt_bboxes_corners,
+                gt_bboxes_corners.new_ones((*gt_bboxes_corners.shape[:-1], 1))
+            ], dim=-1)
+            # [num_cameras, num_objects, 8, 3]
+            corners_uvd: torch.Tensor = torch.einsum('nij,mlj->nmli', lidar2img, gt_bboxes_corners)
+            # [num_cameras, num_objects, 3]
+            centers_uvd: torch.Tensor = torch.einsum('nij,mj->nmi', lidar2img, gt_bboxes_centers)
+            # [num_cameras, num_objects]
+            depth_targets = centers_uvd[..., 2]
+
+            # [num_cameras, num_objects, 8, 2]
+            corners_uv = corners_uvd[..., :2] / corners_uvd[..., -1:]
+
+            depth_maps_all_camera = []
+            gt_bboxes_all_camera = []
+            # generate depth maps and gt_bboxes for each camera.
+            for corners_uv_per_camera, depth_target in zip(corners_uv, depth_targets):
+                # [num_objects, 8]
+                visible = (corners_uv_per_camera[..., 0] > 0) & (corners_uv_per_camera[..., 0] < img_W) & \
+                    (corners_uv_per_camera[..., 1] > 0) & (corners_uv_per_camera[..., 1] < img_H) & \
+                    (corners_uvd[..., 2] > 1)
+                # [num_objects, 8]
+                in_front = (corners_uvd[..., 2] > 0.1)
+                # [N,]
+                mask = visible.any(dim=-1) & in_front.all(dim=-1)
+                # [N, 8, 2]
+                corners_uv_per_camera = corners_uv_per_camera[mask]
+                # [N,]
+                depth_target = depth_target[mask]
+                corners_uv_per_camera = torch.clamp(corners_uv_per_camera, 0, (depth_map_W, depth_map_H))
+                # [N, 4]: (x_min, y_min, x_max, y_max)
+                bboxes = torch.cat([corners_uv_per_camera.min(dim=1), corners_uv_per_camera.max(dim=1)], dim=1)
+                # [N, 4]: (x_min, y_min, w, h)
+                bboxes[:, 2:] -= bboxes[:, :2]
+
+                sort_by_depth = torch.argsort(depth_target, descending=True)
+                bboxes = bboxes[sort_by_depth]
+                depth_target = depth_target[sort_by_depth]
+
+                depth_map = gt_bboxes_corners.new_zeros((depth_map_H, depth_map_W))
+                for bbox, depth in zip(bboxes, depth_target):
+                    x, y, w, h = bbox
+                    depth_map[y:y + h, x:x + w] = depth
+
+                gt_bboxes_all_camera.append(bboxes)
+                depth_maps_all_camera.append(depth_map)
+
+            # [num_cameras, depth_map_H, depth_map_W]
+            depth_maps_all_camera = torch.stack(depth_maps_all_camera)
+            # [num_cameras, depth_map_H, depth_map_W, num_depth_bins], dtype: torch.long
+            depth_maps_all_camera = depth_utils.bin_depths(depth_maps_all_camera, **self.depth_bin_cfg, target=True)
+            gt_depth_maps.append(depth_maps_all_camera)
+            gt_bboxes_2d.append(gt_bboxes_all_camera)
+
+        # [batch, num_cameras, depth_map_H, depth_map_W, num_depth_bins], dtype: torch.long
+        gt_depth_maps = torch.stack(gt_depth_maps)
+        return gt_depth_maps, gt_bboxes_2d
+
     def loss_single(self,
                     cls_scores,
                     bbox_preds,
@@ -365,6 +464,7 @@ class DeformableDetr3DHead(DETRHead):
     def loss(self,
              gt_bboxes_list,
              gt_labels_list,
+             img_metas,
              preds_dicts,
              gt_bboxes_ignore=None):
         """"Loss function.
@@ -405,6 +505,7 @@ class DeformableDetr3DHead(DETRHead):
 
         num_dec_layers = len(all_cls_scores)
         device = gt_labels_list[0].device
+        # TODO: call `get_depth_map_and_gt_bboxes_2d` here and pass them into self.loss_single.
         gt_bboxes_list = [torch.cat(
             (gt_bboxes.gravity_center, gt_bboxes.tensor[:, 3:]),
             dim=1).to(device) for gt_bboxes in gt_bboxes_list]
