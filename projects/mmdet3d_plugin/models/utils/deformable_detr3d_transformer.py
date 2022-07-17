@@ -314,6 +314,7 @@ class DeformableDetr3DTransformer(BaseModule):
             depth_pos_embed = depth_pos_embed.permute(0, 2, 1, 3, 4)
             # depth_pos_embed: [B, C, N, H, W] -> [B, C, N*H*W] -> [N*H*W, B, C]
             depth_pos_embed = depth_pos_embed.flatten(2).permute(2, 0, 1)
+            # print(f'depth_pos_embed: {depth_pos_embed.shape}')
 
         ###
         # decoder

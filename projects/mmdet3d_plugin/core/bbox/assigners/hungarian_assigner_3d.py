@@ -1,10 +1,10 @@
 import torch
-import numpy as np
+# import numpy as np
 from mmdet.core.bbox.builder import BBOX_ASSIGNERS
 from mmdet.core.bbox.assigners import AssignResult
 from mmdet.core.bbox.assigners import BaseAssigner
 from mmdet.core.bbox.match_costs import build_match_cost
-from mmdet.models.utils.transformer import inverse_sigmoid
+# from mmdet.models.utils.transformer import inverse_sigmoid
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
 
 try:
@@ -14,26 +14,29 @@ except ImportError:
 
 
 def linear_sum_assignment_with_inf(cost_matrix):
-    cost_matrix = np.asarray(cost_matrix)
-    min_inf = np.isneginf(cost_matrix).any()
-    max_inf = np.isposinf(cost_matrix).any()
-    if min_inf and max_inf:
-        raise ValueError("matrix contains both inf and -inf")
+    # cost_matrix = np.asarray(cost_matrix)
+    # min_inf = np.isneginf(cost_matrix).any()
+    # max_inf = np.isposinf(cost_matrix).any()
+    # if min_inf and max_inf:
+    #     raise ValueError("matrix contains both inf and -inf")
 
-    if min_inf or max_inf:
-        values = cost_matrix[~np.isinf(cost_matrix)]
-        m = values.min()
-        M = values.max()
-        n = min(cost_matrix.shape)
-        # strictly positive constant even when added
-        # to elements of the cost matrix
-        positive = n * (M - m + np.abs(M) + np.abs(m) + 1)
-        if max_inf:
-            place_holder = (M + (n - 1) * (M - m)) + positive
-        if min_inf:
-            place_holder = (m + (n - 1) * (m - M)) - positive
+    # if min_inf or max_inf:
+    #     values = cost_matrix[~np.isinf(cost_matrix)]
+    #     m = values.min()
+    #     M = values.max()
+    #     n = min(cost_matrix.shape)
+    #     # strictly positive constant even when added
+    #     # to elements of the cost matrix
+    #     positive = n * (M - m + np.abs(M) + np.abs(m) + 1)
+    #     if max_inf:
+    #         place_holder = (M + (n - 1) * (M - m)) + positive
+    #     if min_inf:
+    #         place_holder = (m + (n - 1) * (m - M)) - positive
 
-        cost_matrix[np.isinf(cost_matrix)] = place_holder
+    #     cost_matrix[np.isinf(cost_matrix)] = place_holder
+
+    cost_matrix = torch.nan_to_num(cost_matrix, nan=0.0, posinf=1e8, neginf=-1e8)
+
     return linear_sum_assignment(cost_matrix)
 
 
@@ -142,8 +145,8 @@ class HungarianAssigner3D(BaseAssigner):
         if linear_sum_assignment is None:
             raise ImportError('Please run "pip install scipy" '
                               'to install scipy first.')
-        # matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
-        matched_row_inds, matched_col_inds = linear_sum_assignment_with_inf(cost)
+        matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
+        # matched_row_inds, matched_col_inds = linear_sum_assignment_with_inf(cost)
 
         matched_row_inds = torch.from_numpy(matched_row_inds).to(
             bbox_pred.device)

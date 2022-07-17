@@ -10,7 +10,7 @@
 import numpy as np
 from mmdet.datasets import DATASETS
 from mmdet3d.datasets import NuScenesDataset
-import os
+# import os
 
 
 @DATASETS.register_module()
@@ -78,9 +78,9 @@ class CustomNuScenesDataset(NuScenesDataset):
                     extrinsics=extrinsics
                 ))
 
-        if not self.test_mode:
-            annos = self.get_ann_info(index)
-            input_dict['ann_info'] = annos
+        # if not self.test_mode:
+        annos = self.get_ann_info(index)
+        input_dict['ann_info'] = annos
         return input_dict
 
 

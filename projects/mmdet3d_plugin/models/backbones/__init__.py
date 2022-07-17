@@ -1,3 +1,6 @@
 from .vovnet import VoVNet
 
-__all__ = ['VoVNet']
+__all__ = [
+    'VoVNet',
+    'VoVNetCP',
+]
