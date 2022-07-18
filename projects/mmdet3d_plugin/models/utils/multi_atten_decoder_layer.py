@@ -3,27 +3,19 @@ import copy
 import torch
 from torch import Tensor
 from mmcv.cnn import (build_norm_layer)
+from mmcv.runner.base_module import BaseModule, ModuleList
 
-from mmcv.cnn.bricks.transformer import (BaseTransformerLayer,
-                                         MultiScaleDeformableAttention,
-                                         TransformerLayerSequence,
-                                         build_transformer_layer_sequence,
-                                         build_positional_encoding,
-                                         )
-from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
+from mmcv.utils import (
+    ConfigDict,
+    build_from_cfg,
+)
+from mmcv.cnn.bricks.registry import (
+    ATTENTION,
+    FEEDFORWARD_NETWORK,
+    TRANSFORMER_LAYER,
+)
 
-from mmcv.utils import (ConfigDict, build_from_cfg, deprecated_api_warning,
-                        to_2tuple)
-from mmcv.cnn.bricks.drop import build_dropout
-from mmcv.cnn.bricks.registry import (ATTENTION, FEEDFORWARD_NETWORK, POSITIONAL_ENCODING,
-                                      TRANSFORMER_LAYER, TRANSFORMER_LAYER_SEQUENCE)
-
-from typing import Any, Dict, List, Optional
-
-
-def build_positional_encoding(cfg, default_args=None):
-    """Builder for Position Encoding."""
-    return build_from_cfg(cfg, POSITIONAL_ENCODING, default_args)
+from typing import Optional
 
 
 def build_attention(cfg, default_args=None):
@@ -37,8 +29,8 @@ def build_feedforward_network(cfg, default_args=None):
 
 
 @TRANSFORMER_LAYER.register_module()
-class DepthCrossDecoderLayer(BaseModule):
-    """DepthCrossDecoderLayer for vision transformer.
+class MultiAttentionDecoderLayer(BaseModule):
+    """MultiAttentionDecoderLayer for vision transformer.
     Args:
         attn_cfgs (list[`mmcv.ConfigDict`] | obj:`mmcv.ConfigDict` | None )):
             Configs for `self_attention` or `cross_attention` modules,

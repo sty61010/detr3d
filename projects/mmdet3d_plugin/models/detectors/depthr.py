@@ -46,7 +46,21 @@ class Depthr3D(MVXTwoStageDetector):
         self.grid_mask = GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = use_grid_mask
 
-    def extract_img_feat(self, img, img_metas):
+    @auto_fp16(apply_to=('img'), out_fp32=True)
+    def extract_feat(
+        self,
+        img,
+        img_metas,
+    ):
+        """Extract features from images and points."""
+        img_feats = self.extract_img_feat(img, img_metas)
+        return img_feats
+
+    def extract_img_feat(
+        self,
+        img,
+        img_metas,
+    ):
         """Extract features of images."""
         B = img.size(0)
         if img is not None:
@@ -77,12 +91,6 @@ class Depthr3D(MVXTwoStageDetector):
             img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
         return img_feats_reshaped
 
-    @auto_fp16(apply_to=('img'), out_fp32=True)
-    def extract_feat(self, img, img_metas):
-        """Extract features from images and points."""
-        img_feats = self.extract_img_feat(img, img_metas)
-        return img_feats
-
     @force_fp32(apply_to=('img', 'points'))
     def forward(
         self,
@@ -103,18 +111,20 @@ class Depthr3D(MVXTwoStageDetector):
         else:
             return self.forward_test(**kwargs)
 
-    def forward_train(self,
-                      points=None,
-                      img_metas=None,
-                      gt_bboxes_3d=None,
-                      gt_labels_3d=None,
-                      gt_labels=None,
-                      gt_bboxes=None,
-                      img=None,
-                      proposals=None,
-                      gt_bboxes_ignore=None,
-                      img_depth=None,
-                      img_mask=None):
+    def forward_train(
+        self,
+        points=None,
+        img_metas=None,
+        gt_bboxes_3d=None,
+        gt_labels_3d=None,
+        gt_labels=None,
+        gt_bboxes=None,
+        img=None,
+        proposals=None,
+        gt_bboxes_ignore=None,
+        img_depth=None,
+        img_mask=None,
+    ):
         """Forward training function.
         Args:
             points (list[torch.Tensor], optional): Points of each sample.
@@ -139,6 +149,7 @@ class Depthr3D(MVXTwoStageDetector):
             dict: Losses of different branches.
         """
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
+
         losses = dict()
         losses_pts = self.forward_pts_train(
             img_feats,
@@ -150,12 +161,14 @@ class Depthr3D(MVXTwoStageDetector):
         losses.update(losses_pts)
         return losses
 
-    def forward_pts_train(self,
-                          pts_feats,
-                          gt_bboxes_3d,
-                          gt_labels_3d,
-                          img_metas,
-                          gt_bboxes_ignore=None):
+    def forward_pts_train(
+        self,
+        pts_feats,
+        gt_bboxes_3d,
+        gt_labels_3d,
+        img_metas,
+        gt_bboxes_ignore=None,
+    ):
         """Forward function for point cloud branch.
         Args:
             pts_feats (list[torch.Tensor]): Features of point cloud branch
@@ -177,6 +190,7 @@ class Depthr3D(MVXTwoStageDetector):
         )
         loss_inputs = [gt_bboxes_3d, gt_labels_3d, outs]
         losses = self.pts_bbox_head.loss(*loss_inputs)
+
         return losses
 
     def forward_test(

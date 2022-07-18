@@ -77,37 +77,7 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
-        with_gt_bbox_3d=True,
-
-        depth_gt_encoder=dict(
-            type='DepthGTEncoder',
-            num_depth_bins=80,
-            depth_min=1e-3,
-            depth_max=60.0,
-            embed_dims=embed_dims,
-            num_levels=num_levels,
-            with_gt_depth_maps=True,
-            encoder=dict(
-                type='DetrTransformerEncoder',
-                num_layers=3,
-                transformerlayers=dict(
-                    type='BaseTransformerLayer',
-                    attn_cfgs=[
-                        dict(
-                            type='MultiheadAttention',
-                            embed_dims=embed_dims,
-                            num_heads=8,
-                            dropout=0.1)
-                    ],
-                    feedforward_channels=256,
-                    ffn_dropout=0.1,
-                    operation_order=(
-                        'self_attn', 'norm',
-                        'ffn', 'norm',
-                    )
-                )
-            ),
-        ),
+        with_gt_bbox_3d=False,
 
         transformer=dict(
             type='DeformableDetr3DTransformer',
@@ -140,19 +110,20 @@ model = dict(
                             num_points=1,
                             embed_dims=embed_dims
                         ),
-                        dict(
-                            type='MultiheadAttention',
-                            embed_dims=embed_dims,
-                            num_heads=8,
-                            dropout=0.1,
-                        ),
+
+                        # dict(
+                        #     type='MultiheadAttention',
+                        #     embed_dims=embed_dims,
+                        #     num_heads=8,
+                        #     dropout=0.1,
+                        # ),
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
                         'self_attn', 'norm',
                         'cross_view_attn', 'norm',
-                        'cross_depth_attn', 'norm',
+                        # 'cross_depth_attn', 'norm',
                         'ffn', 'norm',
                     )
                 )

@@ -4,13 +4,13 @@ import torch.nn.functional as F
 # from .transformer import TransformerEncoder, TransformerEncoderLayer
 # from mmcv.runner import BaseModule
 from mmdet.models import NECKS
-from mmcv.cnn.bricks.transformer import (
-    # BaseTransformerLayer,
-    # MultiScaleDeformableAttention,
-    # TransformerLayerSequence,
-    build_transformer_layer_sequence,
-    # build_positional_encoding,
-)
+# from mmcv.cnn.bricks.transformer import (
+#     # BaseTransformerLayer,
+#     # MultiScaleDeformableAttention,
+#     # TransformerLayerSequence,
+#     build_transformer_layer_sequence,
+#     # build_positional_encoding,
+# )
 
 
 @NECKS.register_module()
