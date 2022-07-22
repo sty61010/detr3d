@@ -34,7 +34,7 @@ num_levels = 3
 grid_size = [1.024, 1.024, 8]
 
 model = dict(
-    type='Detr3D',
+    type='Depthr3D',
     use_grid_mask=True,
     img_backbone=dict(
         type='ResNet',
@@ -49,8 +49,8 @@ model = dict(
         style='caffe',
         dcn=dict(type='DCNv2', deform_groups=1, fallback_on_stride=False),
         stage_with_dcn=(False, False, True, True),
-        with_cp=True,
-        pretrained='ckpts/resnet50_msra-5891d200.pth',
+        # with_cp=True,
+        # pretrained='ckpts/resnet50_msra-5891d200.pth',
     ),
     # img_neck=dict(
     #     type='FPN',
@@ -77,34 +77,7 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
-        # depth_predictor=dict(
-        #     type='DepthPredictor',
-        #     num_depth_bins=80,
-        #     depth_min=1e-3,
-        #     depth_max=60.0,
-        #     embed_dims=embed_dims,
-        #     num_levels=num_levels,
-        #     encoder=dict(
-        #         type='DetrTransformerEncoder',
-        #         num_layers=3,
-        #         transformerlayers=dict(
-        #             type='BaseTransformerLayer',
-        #             attn_cfgs=[
-        #                 dict(
-        #                     type='MultiheadAttention',
-        #                     embed_dims=embed_dims,
-        #                     num_heads=8,
-        #                     dropout=0.1)
-        #             ],
-        #             feedforward_channels=256,
-        #             ffn_dropout=0.1,
-        #             operation_order=(
-        #                 'self_attn', 'norm',
-        #                 'ffn', 'norm',
-        #             )
-        #         )
-        #     ),
-        # ),
+        with_gt_bbox_3d=True,
 
         depth_gt_encoder=dict(
             type='DepthGTEncoder',
@@ -113,6 +86,7 @@ model = dict(
             depth_max=60.0,
             embed_dims=embed_dims,
             num_levels=num_levels,
+            depth_gt_encoder_down_scale=4,
             encoder=dict(
                 type='DetrTransformerEncoder',
                 num_layers=3,
@@ -146,9 +120,9 @@ model = dict(
                 return_intermediate=True,
                 transformerlayers=dict(
                     # type='BaseTransformerLayer',
-                    type='DepthCrossDecoderLayer',
-
+                    type='MultiAttentionDecoderLayer',
                     attn_cfgs=[
+
                         dict(
                             type='MultiheadAttention',
                             embed_dims=embed_dims,
@@ -166,26 +140,19 @@ model = dict(
                             num_points=1,
                             embed_dims=embed_dims
                         ),
-
-                        # dict(
-                        #     type='MultiheadAttention',
-                        #     embed_dims=embed_dims,
-                        #     num_heads=8,
-                        #     dropout=0.1,
-                        # ),
-
-                        # dict(
-                        #     type='Detr3DCrossAtten',
-                        #     pc_range=point_cloud_range,
-                        #     num_points=1,
-                        #     embed_dims=embed_dims),
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1,
+                        ),
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
                         'self_attn', 'norm',
                         'cross_view_attn', 'norm',
-                        # 'cross_depth_attn', 'norm',
+                        'cross_depth_attn', 'norm',
                         'ffn', 'norm',
                     )
                 )
@@ -217,20 +184,12 @@ model = dict(
             cls_cost=dict(type='FocalLossCost', weight=2.0),
             reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
             iou_cost=dict(type='IoUCost', weight=0.0),  # Fake cost. This is just to make it compatible with DETR head.
-            pc_range=point_cloud_range))))
+            pc_range=point_cloud_range)
+    )
+    )
+)
 
 dataset_type = 'CustomNuScenesDataset'
-
-
-# data_root = '/work/sty61010/datasets/nuscenes/v1.0-mini/'
-# data_root = '/work/sty61010/datasets/nuscenes/v1.0-trainval/'
-
-# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-mini/'
-# data_root = '/home/master/10/cytseng/data/sets/nuscenes/v1.0-trainval/'
-
-# data_root = '/mnt/ssd1/Datasets/nuscenes/v1.0-mini/'
-# data_root = '/mnt/ssd1/Datasets/nuscenes/v1.0-trainval/'
-
 data_root = 'data/nuscenes/'
 
 file_client_args = dict(backend='disk')
@@ -276,9 +235,6 @@ ida_aug_conf = {
     # "final_dim": (320, 800),
     "resize_lim": (0.8, 1.0),
     "final_dim": (512, 1408),
-
-    # "resize_lim": (1.0, 1.0),
-    # "final_dim": (512, 1408),
     "bot_pct_lim": (0.0, 0.0),
     "rot_lim": (0.0, 0.0),
     "H": 900,
@@ -296,7 +252,6 @@ train_pipeline = [
 
     dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=True),
 
-
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
@@ -304,6 +259,10 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
+
+    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
+    dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
+    dict(type='ObjectNameFilter', classes=class_names),
 
     # dict(type='ResizeCropFlipImage', data_aug_conf=ida_aug_conf, training=False),
 
@@ -318,8 +277,15 @@ test_pipeline = [
             dict(
                 type='DefaultFormatBundle3D',
                 class_names=class_names,
-                with_label=False),
-            dict(type='Collect3D', keys=['img'])
+                with_label=False,
+            ),
+
+            dict(
+                type='Collect3D',
+                keys=['gt_bboxes_3d', 'gt_labels_3d', 'img'],
+            ),
+            # dict(type='Collect3D', keys=['img']),
+
         ])
 ]
 
@@ -379,4 +345,4 @@ evaluation = dict(interval=1, pipeline=test_pipeline)
 find_unused_parameters = True
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-# load_from = 'ckpts/fcos3d.pth'
+load_from = 'ckpts/fcos3d.pth'

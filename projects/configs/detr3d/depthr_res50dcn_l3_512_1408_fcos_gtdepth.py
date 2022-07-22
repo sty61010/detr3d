@@ -86,7 +86,6 @@ model = dict(
             depth_max=60.0,
             embed_dims=embed_dims,
             num_levels=num_levels,
-            with_gt_depth_maps=True,
             encoder=dict(
                 type='DetrTransformerEncoder',
                 num_layers=3,

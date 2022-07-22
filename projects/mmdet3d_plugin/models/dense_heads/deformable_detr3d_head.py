@@ -1,17 +1,22 @@
 import copy
-from typing import Dict, List, Tuple
-from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-from mmcv.cnn import Linear, bias_init_with_prob
-from mmcv.runner import force_fp32
+from typing import (
+    Dict,
+    List,
+    Tuple,
+    Optional
+)
 
 from mmdet.core import (
     multi_apply,
     reduce_mean,
 )
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from mmcv.runner import force_fp32
+from mmcv.cnn import Linear, bias_init_with_prob
+
 from mmdet.models.utils.transformer import inverse_sigmoid
 from mmdet.models import HEADS
 from mmdet.models.dense_heads import DETRHead
@@ -19,6 +24,7 @@ from mmdet3d.core.bbox.coders import build_bbox_coder
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
 from mmdet3d.models.builder import build_neck
 from projects.mmdet3d_plugin.models.utils import depth_utils
+from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 
 
 @HEADS.register_module()
@@ -31,6 +37,18 @@ class DeformableDetr3DHead(DETRHead):
             the outputs of encoder.
         transformer (obj:`ConfigDict`): ConfigDict is used for building
             the Encoder and Decoder.
+
+        depth_predictor (obj:`ConfigDict`): ConfigDict is used for building
+            depth_predictor, which use feature map to predict weight depth
+            distribution and depth embedding.
+            `Optional[ConfigDict]`
+        depth_gt_encoder (obj:`ConfigDict`): ConfigDict is used for building
+            deoth_gt_encoder, which use convolutional layer to suppress gt_depth_maps
+            to gt_depth_embedding.
+            `Optional[ConfigDict]`
+        with_gt_bbox_3d (bool): Whether to get gt_bbox_3d in data pipline,
+            default set to False.
+            `Optional[bool]`
     """
 
     def __init__(self,
@@ -66,6 +84,23 @@ class DeformableDetr3DHead(DETRHead):
         self.positional_encoding = None
         self.code_weights = nn.Parameter(torch.tensor(
             self.code_weights, requires_grad=False), requires_grad=False)
+
+        """
+        Operation for depth embedding
+            depth_bin_cfg: Config for depth_utils.bin_depths
+            depth_predictor (obj:`ConfigDict`): ConfigDict is used for building
+                depth_predictor, which use feature map to predict weight depth
+                distribution and depth embedding.
+                `Optional[ConfigDict]`
+            depth_gt_encoder (obj:`ConfigDict`): ConfigDict is used for building
+                deoth_gt_encoder, which use convolutional layer to suppress gt_depth_maps
+                to gt_depth_embedding.
+                `Optional[ConfigDict]`
+        """
+        self.depth_bin_cfg = None
+        self.depth_predictor = None
+        self.depth_gt_encoder = None
+
         if depth_predictor is not None:
             self.depth_predictor = build_neck(depth_predictor)
             self.depth_bin_cfg = dict(
@@ -74,9 +109,6 @@ class DeformableDetr3DHead(DETRHead):
                 depth_max=depth_predictor.get("depth_max"),
                 num_depth_bins=depth_predictor.get("num_depth_bins"),
             )
-        else:
-            self.depth_predictor = None
-            self.depth_bin_cfg = None
 
         if depth_gt_encoder is not None:
             self.depth_gt_encoder = build_neck(depth_gt_encoder)
@@ -86,9 +118,6 @@ class DeformableDetr3DHead(DETRHead):
                 depth_max=depth_gt_encoder.get("depth_max"),
                 num_depth_bins=depth_gt_encoder.get("num_depth_bins"),
             )
-        else:
-            self.depth_gt_encoder = None
-            self.depth_bin_cfg = None
         self.with_gt_bbox_3d = with_gt_bbox_3d
 
     def _init_layers(self):
@@ -148,6 +177,10 @@ class DeformableDetr3DHead(DETRHead):
             mlvl_feats (tuple[Tensor]): Features from the upstream
                 network, each is a 5D-tensor with shape
                 (B, N, C, H, W).
+
+            img_metas: A list of dict containing the `lidar2img` tensor.
+            gt_bboxes_3d: The ground truth list of `LiDARInstance3DBoxes`.
+
         Returns:
             all_cls_scores (Tensor): Outputs from the classification head, \
                 shape [nb_dec, bs, num_query, cls_out_channels]. Note \
@@ -237,13 +270,6 @@ class DeformableDetr3DHead(DETRHead):
                     pos=None,
                     gt_depth_maps=gt_depth_maps,
                 )
-            # else:
-            #     pred_depth_map_logits, depth_pos_embed, weighted_depth = self.depth_gt_encoder(
-            #         mlvl_feats=mlvl_feats,
-            #         mask=None,
-            #         pos=None,
-            #         gt_depth_maps=None,
-            #     )
 
         # hs: [num_layers, num_query, bs, embed_dims]
         # init_reference: [bs, num_query, 3]
@@ -303,16 +329,24 @@ class DeformableDetr3DHead(DETRHead):
         self,
         gt_bboxes_list: List[LiDARInstance3DBoxes],
         img_metas: List[Dict[str, torch.Tensor]],
-        depth_maps_shape: Tuple[int],
-        target=True,
-        x=torch.Tensor,
-        depth_maps_down_scale=8,
+        depth_maps_shape: Optional[Tuple[int]] = None,
+        target: Optional[bool] = True,
+        x: Optional[torch.Tensor] = None,
+        depth_maps_down_scale: Optional[int] = 8,
     ) -> Tuple[torch.Tensor, List[List[torch.Tensor]]]:
         """Get depth map and the 2D ground truth bboxes.
         Args:
             gt_bboxes_list: The ground truth list of `LiDARInstance3DBoxes`.
             img_metas: A list of dict containing the `lidar2img` tensor.
             depth_maps_shape: The shape (height, width) of the depth map.
+            `Optional[Tuple[int]]`
+            target: Parameter for depth_utils.bin_depths default: True
+            `Optional[bool] = True`
+            x: the original input image feature map, to provide device to create tensor
+            `Optional[torch.Tensor]: [B, N, C, H, W]`
+            depth_maps_down_scale: down scale of gt_depth_maps default: 8
+            `Optiona[int] = 8`
+
         Returns:
             gt_depth_maps: Thr ground truth depth maps with shape
                 [batch, num_cameras, depth_map_H, depth_map_W, num_depth_bins].
@@ -323,9 +357,7 @@ class DeformableDetr3DHead(DETRHead):
                 [[gt_bboxes_tensor_camera_0, gt_bboxes_tensor_camera_1, ..., gt_bboxes_tensor_camera_n] (sample 0),
                  [gt_bboxes_tensor_camera_0, gt_bboxes_tensor_camera_1, ..., gt_bboxes_tensor_camera_n] (sample 1),
                  ...].
-            target: Parameter for depth_utils.bin_depths default: True
-            x: the original input image feature map
-            depth_maps_down_scale: down scale of gt_depth_maps default: 8
+
         """
         img_H, img_W, _ = img_metas[0]['img_shape'][0]
         # depth_map_H, depth_map_W = depth_maps_shape

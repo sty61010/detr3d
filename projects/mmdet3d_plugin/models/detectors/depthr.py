@@ -201,6 +201,19 @@ class Depthr3D(MVXTwoStageDetector):
         gt_labels_3d=None,
         **kwargs,
     ):
+        """
+        Test function without augmentaiton.
+        Args:
+            x (list[torch.Tensor]): Features of multi-camera image
+            img_metas (list[dict]): Meta information of samples.
+
+            gt_bboxes_3d (list[:obj:`BaseInstance3DBoxes`]): Ground truth
+                boxes for each sample.
+            gt_labels_3d (list[torch.Tensor]): Ground truth labels for
+                boxes of each sampole
+        Returns:
+            bbox_list: dict of bboxes
+        """
         for var, name in [(img_metas, 'img_metas')]:
             if not isinstance(var, list):
                 raise TypeError('{} must be a list, but got {}'.format(
@@ -226,7 +239,19 @@ class Depthr3D(MVXTwoStageDetector):
         gt_bboxes_3d=None,
         gt_labels_3d=None,
     ):
-        """Test function without augmentaiton."""
+        """
+        Test function without augmentaiton.
+        Args:
+            x (list[torch.Tensor]): Features of multi-camera image
+            img_metas (list[dict]): Meta information of samples.
+
+            gt_bboxes_3d (list[:obj:`BaseInstance3DBoxes`]): Ground truth
+                boxes for each sample.
+            gt_labels_3d (list[torch.Tensor]): Ground truth labels for
+                boxes of each sampole
+        Returns:
+            bbox_list: dict of bboxes
+        """
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
 
         bbox_list = [dict() for i in range(len(img_metas))]
@@ -249,7 +274,19 @@ class Depthr3D(MVXTwoStageDetector):
         gt_bboxes_3d=None,
         gt_labels_3d=None,
     ):
-        """Test function of point cloud branch."""
+        """
+        Test function of point cloud branch.
+        Args:
+            x (list[torch.Tensor]): Features of multi-camera image
+            img_metas (list[dict]): Meta information of samples.
+
+            gt_bboxes_3d (list[:obj:`BaseInstance3DBoxes`]): Ground truth
+                boxes for each sample.
+            gt_labels_3d (list[torch.Tensor]): Ground truth labels for
+                boxes of each sampole
+        Returns:
+            Bounding box results in cpu mode.
+        """
         outs = self.pts_bbox_head(
             x,
             img_metas,
@@ -261,7 +298,10 @@ class Depthr3D(MVXTwoStageDetector):
             img_metas,
             rescale=rescale,
         )
-
+        """
+        Convert detection results to a list of numpy arrays.
+        source: https://mmdetection3d.readthedocs.io/en/latest/_modules/mmdet3d/core/bbox/transforms.html#bbox3d2result
+        """
         bbox_results = [
             bbox3d2result(bboxes, scores, labels)
             for bboxes, scores, labels in bbox_list

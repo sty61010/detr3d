@@ -11,6 +11,10 @@ from mmcv.cnn.bricks.transformer import (
     build_transformer_layer_sequence,
     # build_positional_encoding,
 )
+from typing import (
+    List,
+    Optional
+)
 
 
 @NECKS.register_module()
@@ -65,31 +69,35 @@ class DepthPredictor(nn.Module):
 
         if encoder is not None:
             self.depth_encoder = build_transformer_layer_sequence(encoder)
-        # depth_encoder_layer = TransformerEncoderLayer(
-        #     d_model, nhead=8, dim_feedforward=256, dropout=0.1)
-
-        # self.depth_encoder = TransformerEncoder(depth_encoder_layer, 1)
 
         self.depth_pos_embed = nn.Embedding(int(self.depth_max) + 1, 256)
 
         self.num_levels = num_levels
 
     def forward(self,
-                mlvl_feats,
-                mask=None,
-                pos=None):
+                mlvl_feats: List[torch.Tensor],
+                mask: Optional[List[torch.Tensor]] = None,
+                pos: Optional[List[torch.Tensor]] = None):
         """Forward function.
         Args:
-            mlvl_feats (tuple[Tensor]): Features from the upstream
+            mlvl_feats (List[torch.Tensor]): Features from the upstream
                 network, each is a 5D-tensor with shape
-                (B, N, C, H, W).
+                `List[torch.Tensor]: [B, N, C, H, W].`
+            mask (Optional[List[torch.Tensor]]): mask for feature map to fit in transformer encoder
+                `Optional[List[torch.Tensor]]: [B, N, H, W]`
+            pos (Optional[List[torch.Tensor]]): position embedding for input feature images
+                `Optional[List[torch.Tensor]]: [B, N, C, H, W]`
+
+
         Returns:
-            all_cls_scores (Tensor): Outputs from the classification head, \
-                shape [nb_dec, bs, num_query, cls_out_channels]. Note \
-                cls_out_channels should includes background.
-            all_bbox_preds (Tensor): Sigmoid outputs from the regression \
-                head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
-                Shape [nb_dec, bs, num_query, 9].
+            depth_logits: one hot encoding to represent the predict depth_maps,
+                in depth_gt_encoder default is None
+                `[B, N, D, H, W]`
+            depth_pos_embed: depth_embedding from gt_depth_maps or predcted_depth_maps
+                for cross_depth_atten
+                `[B, N, C, H, W]`
+            weighted_depth: weight-sum value of predicted_depth_maps or gt_depth_maps
+                `[B, N, H, W]`
         """
         assert len(mlvl_feats) == self.num_levels
         # mlvl_feats (tuple[Tensor]): [B, N, C, H, W]
@@ -111,7 +119,7 @@ class DepthPredictor(nn.Module):
         depth_logits = self.depth_classifier(src)
 
         depth_probs = F.softmax(depth_logits, dim=1)
-            
+
         weighted_depth = (depth_probs * self.depth_bin_values.reshape(1, -1, 1, 1)).sum(dim=1)
 
         # print(f'src: {src.shape}')
