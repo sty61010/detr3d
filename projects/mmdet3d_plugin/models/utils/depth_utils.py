@@ -36,9 +36,8 @@ def bin_depths(depth_map, mode="LID", depth_min=1e-3, depth_max=60, num_depth_bi
     # Remove indicies outside of bounds
     mask = (indices < 0) | (indices > num_depth_bins) | (~torch.isfinite(indices))
     indices[mask] = num_depth_bins
+    indices = indices.long()
     if target:
-        # Convert to integer
-        indices = indices.type(torch.long)
         return indices
     # [*, H, W, num_depth_bins + 1]
     logits = F.one_hot(indices, num_classes=num_depth_bins + 1).float()

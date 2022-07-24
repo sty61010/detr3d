@@ -116,7 +116,7 @@ class DepthGTEncoder(nn.Module):
 
         depth_logits = None
 
-        B, N, H, W = gt_depth_maps.shape
+        B, N, H, W, _ = gt_depth_maps.shape
         # gt_depth_maps: [B*N, H, W, D] -> [B*N, D, H, W]
         gt_depth_maps = gt_depth_maps.flatten(0, 1).permute(0, 3, 1, 2)
         # gt_depth_maps: [B*N, D, H, W]

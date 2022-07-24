@@ -241,7 +241,7 @@ class DeformableDetr3DHead(DETRHead):
                 depth_maps_down_scale=8,
             )
             gt_depth_maps = gt_depth_maps.to(mlvl_feats[0].device)
-            print(f'gt_depth_maps: {gt_depth_maps.shape}')
+            # print(f'gt_depth_maps: {gt_depth_maps.shape}')
 
         if self.depth_predictor is not None:
             # pred_depth_map_logits: [B, N, D, H, W]
