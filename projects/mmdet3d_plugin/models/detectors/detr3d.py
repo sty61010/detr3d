@@ -91,7 +91,12 @@ class Detr3D(MVXTwoStageDetector):
         Returns:
             dict: Losses of each branch.
         """
-        outs = self.pts_bbox_head(pts_feats, img_metas)
+        # outs = self.pts_bbox_head(pts_feats, img_metas)
+        outs = self.pts_bbox_head(
+            pts_feats,
+            img_metas,
+            gt_bboxes_3d
+        )
         loss_inputs = [gt_bboxes_3d, gt_labels_3d, outs]
         losses = self.pts_bbox_head.loss(*loss_inputs)
         return losses
@@ -149,18 +154,28 @@ class Detr3D(MVXTwoStageDetector):
         """
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
         losses = dict()
-        losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d,
-                                            gt_labels_3d, img_metas,
-                                            gt_bboxes_ignore)
+        losses_pts = self.forward_pts_train(
+            img_feats,
+            gt_bboxes_3d,
+            gt_labels_3d,
+            img_metas,
+            gt_bboxes_ignore,
+        )
         losses.update(losses_pts)
         return losses
 
-    def forward_test(self, img_metas, img=None, **kwargs):
+    def forward_test(
+            self,
+            img_metas,
+            img=None,
+            **kwargs
+    ):
         for var, name in [(img_metas, 'img_metas')]:
             if not isinstance(var, list):
                 raise TypeError('{} must be a list, but got {}'.format(
                     name, type(var)))
         img = [img] if img is None else img
+
         return self.simple_test(img_metas[0], img[0], **kwargs)
         # if num_augs == 1:
         #     img = [img] if img is None else img
@@ -168,7 +183,12 @@ class Detr3D(MVXTwoStageDetector):
         # else:
         #     return self.aug_test(None, img_metas, img, **kwargs)
 
-    def simple_test_pts(self, x, img_metas, rescale=False):
+    def simple_test_pts(
+        self,
+        x,
+        img_metas,
+        rescale=False
+    ):
         """Test function of point cloud branch."""
         outs = self.pts_bbox_head(x, img_metas)
         bbox_list = self.pts_bbox_head.get_bboxes(
@@ -179,7 +199,12 @@ class Detr3D(MVXTwoStageDetector):
         ]
         return bbox_results
 
-    def simple_test(self, img_metas, img=None, rescale=False):
+    def simple_test(
+        self,
+        img_metas,
+        img=None,
+        rescale=False
+    ):
         """Test function without augmentaiton."""
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
 

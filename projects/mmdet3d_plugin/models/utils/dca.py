@@ -3,13 +3,11 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import xavier_init, constant_init
 from mmcv.cnn.bricks.registry import ATTENTION
 from mmcv.cnn.bricks.transformer import build_attention
 from mmcv.runner.base_module import BaseModule
 
-from torch.nn.init import normal_
-from typing import Dict, List, Optional, Tuple
+from typing import Tuple
 
 
 def inverse_sigmoid(x, eps=1e-5):
@@ -314,7 +312,7 @@ def feature_sampling(mlvl_feats, reference_points, pc_range, img_metas):
     eps = 1e-5
     mask = (reference_points_cam[..., 2:3] > eps)
     reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
-        reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3])*eps)
+        reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps)
     reference_points_cam[..., 0] /= img_metas[0]['img_shape'][0][1]
     reference_points_cam[..., 1] /= img_metas[0]['img_shape'][0][0]
     reference_points_cam = (reference_points_cam - 0.5) * 2

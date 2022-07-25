@@ -117,6 +117,7 @@ work_dirs/
 exps/
 *~
 mmdet3d/.mim
+mmdetection3d/
 
 # Pytorch
 *.pth
