@@ -119,9 +119,14 @@ model = dict(
                 num_layers=6,
                 return_intermediate=True,
                 transformerlayers=dict(
-                    # type='BaseTransformerLayer',
                     type='MultiAttentionDecoderLayer',
                     attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1,
+                        ),
 
                         dict(
                             type='MultiheadAttention',
@@ -140,19 +145,14 @@ model = dict(
                             num_points=1,
                             embed_dims=embed_dims
                         ),
-                        dict(
-                            type='MultiheadAttention',
-                            embed_dims=embed_dims,
-                            num_heads=8,
-                            dropout=0.1,
-                        ),
+
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
+                        'cross_depth_attn', 'norm',
                         'self_attn', 'norm',
                         'cross_view_attn', 'norm',
-                        'cross_depth_attn', 'norm',
                         'ffn', 'norm',
                     )
                 )
@@ -320,7 +320,7 @@ data = dict(
         type=dataset_type,
         pipeline=test_pipeline,
         classes=class_names,
-        modality=input_modality)
+        modality=input_modality),
 )
 
 optimizer = dict(
@@ -331,7 +331,9 @@ optimizer = dict(
             'img_backbone': dict(lr_mult=0.1),
         }),
     weight_decay=0.01)
+
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',

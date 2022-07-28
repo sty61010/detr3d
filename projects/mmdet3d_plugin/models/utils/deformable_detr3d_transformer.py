@@ -346,7 +346,10 @@ class DeformableDetr3DTransformer(BaseModule):
                 reg_branches=reg_branches,
                 img_metas=img_metas,
                 only_decoder=True,
+                # depth_pos_embed: [N*H*W, B, C]
                 depth_pos_embed=depth_pos_embed,
+                # view_features: [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C]
+                view_features=value,
                 **kwargs
             )
 
