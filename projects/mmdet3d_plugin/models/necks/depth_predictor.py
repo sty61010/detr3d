@@ -25,8 +25,8 @@ class DepthPredictor(nn.Module):
                  depth_min=1e-3,
                  depth_max=60.0,
                  embed_dims=256,
-                 encoder=None,
                  num_levels=4,
+                 encoder=None,
                  ):
         """
         Initialize depth predictor and depth encoder
@@ -57,8 +57,16 @@ class DepthPredictor(nn.Module):
             nn.Conv2d(d_model, d_model, kernel_size=(1, 1)),
             nn.GroupNorm(32, d_model))
 
+        # self.depth_head = nn.Sequential(
+        #     nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
+        #     nn.GroupNorm(32, num_channels=d_model),
+        #     nn.ReLU(),
+        #     nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
+        #     nn.GroupNorm(32, num_channels=d_model),
+        #     nn.ReLU())
+
         self.depth_head = nn.Sequential(
-            nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
+            nn.Conv2d(d_model, d_model, kernel_size=(3, 3), stride=(2, 2), padding=1),
             nn.GroupNorm(32, num_channels=d_model),
             nn.ReLU(),
             nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
@@ -113,6 +121,7 @@ class DepthPredictor(nn.Module):
         src_16 = self.proj(flatten_feats[1])
         src_32 = self.upsample(F.interpolate(flatten_feats[2], size=src_16.shape[-2:]))
         src_8 = self.downsample(flatten_feats[0])
+        # default down sample 32
         src = (src_8 + src_16 + src_32) / 3
 
         src = self.depth_head(src)

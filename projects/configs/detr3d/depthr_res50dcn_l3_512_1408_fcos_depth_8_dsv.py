@@ -172,14 +172,14 @@ model = dict(
             loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', loss_weight=0.25),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0),
-        loss_ddn=dict(
-            type='DDNLoss',
-            alpha=0.25,
-            gamma=2.0,
-            fg_weight=13,
-            bg_weight=1,
-            downsample_factor=1,
-        ),
+        # loss_ddn=dict(
+        #     type='DDNLoss',
+        #     alpha=0.25,
+        #     gamma=2.0,
+        #     fg_weight=13,
+        #     bg_weight=1,
+        #     downsample_factor=1,
+        # ),
     ),
 
     # model training and testing settings
