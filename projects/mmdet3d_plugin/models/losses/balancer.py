@@ -76,7 +76,6 @@ def compute_fg_mask(gt_boxes2d: List[List[torch.Tensor]],
         fg_mask [torch.Tensor(shape)]: Foreground mask
     """
     fg_mask = torch.zeros(shape, dtype=torch.bool, device=device)
-    # print(f'fg_mask: {fg_mask.shape}')
 
     B, N = len(gt_boxes2d), len(gt_boxes2d[0])
     # iterate batch size
@@ -85,8 +84,6 @@ def compute_fg_mask(gt_boxes2d: List[List[torch.Tensor]],
         for n in range(N):
             # iterate num_objects in per camera
             for i in range(gt_boxes2d[b][n].shape[0]):
-                # x, y, w, h = bbox
-                # depth_map[y:y + h, x:x + w] = depth
                 x, y, w, h = gt_boxes2d[b][n][i]
                 fg_mask[b * N + n, y:y + h, x:x + w] = True
 

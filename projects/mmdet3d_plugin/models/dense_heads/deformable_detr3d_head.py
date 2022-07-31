@@ -93,7 +93,7 @@ class DeformableDetr3DHead(DETRHead):
         self.depth_bin_cfg = None
         self.depth_predictor = None
         self.depth_gt_encoder = None
-        self.loss_ddn = None
+        # self.loss_ddn = None
         self.depth_maps_down_scale = 8
         self.gt_depth_maps_down_scale = 8
         if depth_predictor is not None:
@@ -802,8 +802,6 @@ class DeformableDetr3DHead(DETRHead):
             # pred_depth_map_logits: [B, N, D+1, H, W]
             pred_depth_map_logits = preds_dicts['pred_depth_map_logits']
             assert pred_depth_map_logits is not None
-            # print(f'pred_depth_map_logits: {pred_depth_map_logits.shape}')
-
             # get gt_depth_maps:
             # gt_depth_maps with depth_gt_encoder: [B, N, H, W, num_depth_bins], dtype: torch.float32
             # gt_depth_maps with normal depth encoder: [B, N, H, W], dtype: torch.long
