@@ -37,9 +37,6 @@ class DeformableDetr3DHead(DETRHead):
             deoth_gt_encoder, which use convolutional layer to suppress gt_depth_maps
             to gt_depth_embedding.
             `Optional[ConfigDict]`
-        with_gt_bbox_3d (bool): Whether to get gt_bbox_3d in data pipline,
-            default set to False.
-            `Optional[bool]`
     """
 
     def __init__(self,
@@ -52,7 +49,6 @@ class DeformableDetr3DHead(DETRHead):
                  code_weights=None,
                  depth_predictor=None,
                  depth_gt_encoder=None,
-                 with_gt_bbox_3d=True,
                  loss_ddn=None,
                  ** kwargs):
         self.with_box_refine = with_box_refine
@@ -94,6 +90,7 @@ class DeformableDetr3DHead(DETRHead):
         self.depth_gt_encoder = None
         self.loss_ddn = None
         self.depth_maps_down_scale = 8
+        self.gt_depth_maps_down_scale = 8
         if depth_predictor is not None:
             self.depth_predictor = build_neck(depth_predictor)
             self.depth_bin_cfg = dict(
@@ -111,11 +108,11 @@ class DeformableDetr3DHead(DETRHead):
                 depth_max=depth_gt_encoder.get("depth_max"),
                 num_depth_bins=depth_gt_encoder.get("num_depth_bins"),
             )
+            self.gt_depth_maps_down_scale = depth_gt_encoder.get("gt_depth_maps_down_scale")
+
         if loss_ddn is not None:
             self.loss_ddn = build_loss(loss_ddn)
             self.depth_maps_down_scale = loss_ddn.get("downsample_factor")
-
-        self.with_gt_bbox_3d = with_gt_bbox_3d
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -233,22 +230,8 @@ class DeformableDetr3DHead(DETRHead):
 
         # Operations for depth embedding
         depth_pos_embed = None
-        gt_depth_maps = None
-
-        if gt_bboxes_3d is not None and self.with_gt_bbox_3d is True:
-            # gt_depth_maps with depth_gt_encoder: [B, N, H, W, num_depth_bins], dtype: torch.float32
-            # gt_depth_maps with normal depth encoder: [B, N, H, W], dtype: torch.long
-            gt_depth_maps, gt_bboxes_2d = self.get_depth_map_and_gt_bboxes_2d(
-                gt_bboxes_list=gt_bboxes_3d,
-                img_metas=img_metas,
-                # TODO: `target` should be true after removing depth_gt_encoder
-                target=(self.depth_gt_encoder is None),
-                device=mlvl_feats[0].device,
-                depth_maps_down_scale=8,
-            )
-            gt_depth_maps = gt_depth_maps.to(mlvl_feats[0].device)
-            # print(f'gt_depth_maps: {gt_depth_maps.shape}')
-
+        pred_depth_map_logits = None
+        weighted_depth = None
         if self.depth_predictor is not None:
             # pred_depth_map_logits: [B, N, D, H, W]
             # depth_pos_embed: [B, N, C, H, W]
@@ -261,14 +244,25 @@ class DeformableDetr3DHead(DETRHead):
             # print(f'pred_depth_map_logits: {pred_depth_map_logits.shape[:]}')
 
         if self.depth_gt_encoder is not None:
-            if gt_depth_maps is not None:
-                # print(f'gt_depth_maps: {gt_depth_maps.shape[:]}')
-                pred_depth_map_logits, depth_pos_embed, weighted_depth = self.depth_gt_encoder(
-                    mlvl_feats=mlvl_feats,
-                    mask=None,
-                    pos=None,
-                    gt_depth_maps=gt_depth_maps,
-                )
+            assert gt_bboxes_3d is not None
+            # gt_depth_maps with depth_gt_encoder: [B, N, H, W, num_depth_bins], dtype: torch.float32
+            gt_depth_maps, gt_bboxes_2d = self.get_depth_map_and_gt_bboxes_2d(
+                gt_bboxes_list=gt_bboxes_3d,
+                img_metas=img_metas,
+                target=False,
+                device=mlvl_feats[0].device,
+                depth_maps_down_scale=self.gt_depth_maps_down_scale,
+            )
+            gt_depth_maps = gt_depth_maps.to(mlvl_feats[0].device)
+            # print(f'gt_depth_maps: {gt_depth_maps.shape}')
+            # We do not need pred_depth_map_logits and weighted_depth to compute
+            # loss_ddn when using gt_depth_maps
+            _, depth_pos_embed, _ = self.depth_gt_encoder(
+                mlvl_feats=mlvl_feats,
+                mask=None,
+                pos=None,
+                gt_depth_maps=gt_depth_maps,
+            )
 
         # hs: [num_layers, num_query, bs, embed_dims]
         # init_reference: [bs, num_query, 3]
@@ -720,7 +714,7 @@ class DeformableDetr3DHead(DETRHead):
         # all_bbox_preds(torch.Tensor): [num_layer, B, num_queries, 10]
         all_bbox_preds = preds_dicts['all_bbox_preds']
         # print(f'all_cls_scores: {(all_cls_scores.shape)}')
-        # print(f'all_bbox_preds: {(all_bbox_preds.shape)}')
+        print(f'all_bbox_preds: {(all_bbox_preds.shape)}')
 
         enc_cls_scores = preds_dicts['enc_cls_scores']
         enc_bbox_preds = preds_dicts['enc_bbox_preds']
@@ -779,6 +773,8 @@ class DeformableDetr3DHead(DETRHead):
             # loss from pred_depth_map_logits:
             # pred_depth_map_logits: [B, N, D+1, H, W]
             pred_depth_map_logits = preds_dicts['pred_depth_map_logits']
+            assert pred_depth_map_logits is not None
+            print(f'pred_depth_map_logits: {pred_depth_map_logits.shape}')
             # get gt_depth_maps:
             # gt_depth_maps with depth_gt_encoder: [B, N, H, W, num_depth_bins], dtype: torch.float32
             # gt_depth_maps with normal depth encoder: [B, N, H, W], dtype: torch.long
@@ -805,7 +801,7 @@ class DeformableDetr3DHead(DETRHead):
             )
             gt_depth_maps = gt_depth_maps.to(device)
 
-            # print(f'gt_depth_maps: {gt_depth_maps.shape}')
+            print(f'gt_depth_maps: {gt_depth_maps.shape}')
             loss_ddn = self.loss_ddn(
                 depth_logits=pred_depth_map_logits,
                 depth_target=gt_depth_maps,

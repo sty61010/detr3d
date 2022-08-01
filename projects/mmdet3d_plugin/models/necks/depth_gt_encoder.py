@@ -27,8 +27,8 @@ class DepthGTEncoder(nn.Module):
                  depth_min=1e-3,
                  depth_max=60.0,
                  embed_dims=256,
-                 encoder=None,
                  num_levels=4,
+                 gt_depth_maps_down_scale=8,
                  depth_gt_encoder_down_scale=4,
                  ):
         """
@@ -122,6 +122,7 @@ class DepthGTEncoder(nn.Module):
         # gt_depth_maps: [B*N, D, H, W]
         # gt_depth_maps = F.one_hot(gt_depth_maps, num_classes=self.depth_num_bins + 1).permute(0, 3, 1, 2).float()
         depth_probs = gt_depth_maps.clone()
+        # print(f'gt_depth_maps; {gt_depth_maps.shape}')
 
         # gt_depth_embs: [B*N, C, H, W]
         # gt_depth_embs = self.depth_head(depth_probs)

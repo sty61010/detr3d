@@ -1,63 +1,36 @@
+from typing import List
 import torch
 import torch.nn as nn
 
 from mmdet3d.models.builder import LOSSES
-# from mmdet3d.models.utils.utils import weighted_loss
 from .balancer import Balancer
 from .focalloss import FocalLoss
 # based on:
 # https://github.com/TRAILab/CaDDN/blob/master/pcdet/models/backbones_3d/ffe/ddn_loss/ddn_loss.py
 
-# @weighted_loss
-# def my_loss(pred, target):
-#     assert pred.size() == target.size() and target.numel() > 0
-#     loss = torch.abs(pred - target)
-#     return loss
-
-
-# @LOSSES.register_module()
-# class MyLoss(nn.Module):
-
-#     def __init__(self, reduction='mean', loss_weight=1.0):
-#         super(MyLoss, self).__init__()
-#         self.reduction = reduction
-#         self.loss_weight = loss_weight
-
-#     def forward(self,
-#                 pred,
-#                 target,
-#                 weight=None,
-#                 avg_factor=None,
-#                 reduction_override=None):
-#         assert reduction_override in (None, 'none', 'mean', 'sum')
-#         reduction = (
-#             reduction_override if reduction_override else self.reduction)
-#         loss_bbox = self.loss_weight * my_loss(
-#             pred, target, weight, reduction=reduction, avg_factor=avg_factor)
-#         return loss_bbox
-
 
 @LOSSES.register_module()
 class DDNLoss(nn.Module):
+    """Depth Distribution Network Loss from https://arxiv.org/abs/2103.01100.
+    Args:
+        alpha [float]: Alpha value for Focal Loss
+        gamma [float]: Gamma value for Focal Loss
+        fg_weight [float]: Foreground loss weight
+        bg_weight [float]: Background loss weight
+        downsample_factor [int]: Depth map downsample factor
+        loss_weight [float]: weight for loss_ddn
+    """
+
     def __init__(self,
-                 alpha=0.25,
-                 gamma=2.0,
-                 fg_weight=13,
-                 bg_weight=1,
-                 downsample_factor=1):
-        """
-        Initializes DDNLoss module
-        Args:
-            weight [float]: Loss function weight
-            alpha [float]: Alpha value for Focal Loss
-            gamma [float]: Gamma value for Focal Loss
-            disc_cfg [dict]: Depth discretiziation configuration
-            fg_weight [float]: Foreground loss weight
-            bg_weight [float]: Background loss weight
-            downsample_factor [int]: Depth map downsample factor
-        """
+                 alpha: float = 0.25,
+                 gamma: float = 2.0,
+                 fg_weight: float = 13,
+                 bg_weight: float = 1,
+                 downsample_factor: int = 1,
+                 loss_weight: float = 1.0,
+                 ):
+
         super().__init__()
-        self.device = torch.cuda.current_device()
         self.balancer = Balancer(
             downsample_factor=downsample_factor,
             fg_weight=fg_weight,
@@ -67,10 +40,13 @@ class DDNLoss(nn.Module):
         self.alpha = alpha
         self.gamma = gamma
         self.loss_func = FocalLoss(alpha=self.alpha, gamma=self.gamma, reduction="none")
+        self.loss_weight = loss_weight
 
-    def forward(self, depth_logits, depth_target, gt_bboxes_2d):
-        """
-        Gets depth_map loss
+    def forward(self,
+                depth_logits: torch.Tensor,
+                depth_target: torch.Tensor,
+                gt_bboxes_2d: List[List[torch.Tensor]]) -> torch.Tensor:
+        """Gets depth_map loss
         Args:
             depth_logits(torch.Tensor): [B, N, D+1, H, W]: Predicted depth logits
             depth_target(torch.Tensor): [B, N, H, W]
@@ -98,5 +74,7 @@ class DDNLoss(nn.Module):
         # print(f'loss: {loss.shape}')
         # Compute foreground/background balancing
         loss = self.balancer(loss=loss, gt_boxes2d=gt_bboxes_2d)
+
+        loss = self.loss_weight * loss
 
         return loss

@@ -32,6 +32,7 @@ num_levels = 3
 # num_levels = 4
 # grid_size=[2.048, 2.048, 8]
 grid_size = [1.024, 1.024, 8]
+depth_maps_down_scale = 16
 
 model = dict(
     type='Depthr3D',
@@ -77,19 +78,18 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
-        with_gt_bbox_3d=True,
 
-        depth_gt_encoder=dict(
-            type='DepthGTEncoder',
+        depth_predictor=dict(
+            type='DepthPredictor',
             num_depth_bins=80,
             depth_min=1e-3,
             depth_max=60.0,
             embed_dims=embed_dims,
             num_levels=num_levels,
-            depth_gt_encoder_down_scale=4,
+            depth_maps_down_scale=depth_maps_down_scale,
             encoder=dict(
                 type='DetrTransformerEncoder',
-                num_layers=3,
+                num_layers=1,
                 transformerlayers=dict(
                     type='BaseTransformerLayer',
                     attn_cfgs=[
@@ -134,6 +134,7 @@ model = dict(
                             num_heads=8,
                             dropout=0.1,
                         ),
+
                         dict(
                             type='DeformableCrossAttention',
                             attn_cfg=dict(
@@ -170,9 +171,19 @@ model = dict(
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=2.0),
-        loss_bbox=dict(type='L1Loss', loss_weight=0.25),
-        loss_iou=dict(type='GIoULoss', loss_weight=0.0)),
+            loss_weight=2.0,
+        ),
+        loss_bbox=dict(
+            type='L1Loss',
+            loss_weight=0.25,
+        ),
+        loss_iou=dict(
+            type='GIoULoss',
+            loss_weight=0.0,
+        ),
+
+    ),
+
     # model training and testing settings
     train_cfg=dict(pts=dict(
         grid_size=[512, 512, 1],

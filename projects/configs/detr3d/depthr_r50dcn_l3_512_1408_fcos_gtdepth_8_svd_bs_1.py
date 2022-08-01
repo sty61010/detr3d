@@ -86,6 +86,7 @@ model = dict(
             depth_max=60.0,
             embed_dims=embed_dims,
             num_levels=num_levels,
+            depth_gt_encoder_down_scale=4,
             encoder=dict(
                 type='DetrTransformerEncoder',
                 num_layers=3,
@@ -139,6 +140,7 @@ model = dict(
                             num_points=1,
                             embed_dims=embed_dims
                         ),
+
                         dict(
                             type='MultiheadAttention',
                             embed_dims=embed_dims,
@@ -169,9 +171,17 @@ model = dict(
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=2.0),
-        loss_bbox=dict(type='L1Loss', loss_weight=0.25),
-        loss_iou=dict(type='GIoULoss', loss_weight=0.0)),
+            loss_weight=2.0
+        ),
+        loss_bbox=dict(
+            type='L1Loss',
+            loss_weight=0.25,
+        ),
+        loss_iou=dict(
+            type='GIoULoss',
+            loss_weight=0.0,
+        )
+    ),
     # model training and testing settings
     train_cfg=dict(pts=dict(
         grid_size=[512, 512, 1],

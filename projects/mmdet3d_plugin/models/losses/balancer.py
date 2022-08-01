@@ -1,5 +1,4 @@
-
-
+from typing import List, Union
 import torch
 import torch.nn as nn
 
@@ -8,22 +7,20 @@ import torch.nn as nn
 
 
 class Balancer(nn.Module):
-    def __init__(self, fg_weight, bg_weight, downsample_factor=1):
-        """
-        Initialize fixed foreground/background loss balancer
-        Args:
-            fg_weight [float]: Foreground loss weight
-            bg_weight [float]: Background loss weight
-            downsample_factor [int]: Depth map downsample factor
-        """
+    """The foreground/background loss balancer
+    Args:
+        fg_weight [float]: Foreground loss weight
+        bg_weight [float]: Background loss weight
+        downsample_factor [int]: Depth map downsample factor
+    """
+    def __init__(self, fg_weight: float, bg_weight: float, downsample_factor: int = 1):
         super().__init__()
         self.fg_weight = fg_weight
         self.bg_weight = bg_weight
         self.downsample_factor = downsample_factor
 
-    def forward(self, loss, gt_boxes2d):
-        """
-        Forward pass
+    def forward(self, loss: torch.Tensor, gt_boxes2d: List[List[torch.Tensor]]) -> torch.Tensor:
+        """Forward pass
         Args:
             loss [torch.Tensor(BN, H, W)]: Pixel-wise loss
                 [B*N, H, W]
@@ -36,7 +33,6 @@ class Balancer(nn.Module):
                     ...]
         Returns:
             loss [torch.Tensor(1)]: Total loss after foreground/background balancing
-            tb_dict [dict[float]]: All losses to log in tensorboard
         """
         # Compute masks
         fg_mask = compute_fg_mask(gt_boxes2d=gt_boxes2d,
@@ -59,9 +55,11 @@ class Balancer(nn.Module):
         return loss
 
 
-def compute_fg_mask(gt_boxes2d, shape, downsample_factor=1, device=torch.device("cpu")):
-    """
-    Compute foreground mask for images
+def compute_fg_mask(gt_boxes2d: List[List[torch.Tensor]],
+                    shape: Union[torch.Size, tuple],
+                    downsample_factor: int = 1,
+                    device: torch.device = torch.device("cpu")) -> torch.Tensor:
+    """Computes foreground mask for images
     Args:
         gt_bboxes_2d: A list of list of tensor containing 2D ground truth bboxes(x, y, w, h)
             for each sample and each camera. Each tensor has shape [N_i, 4].
@@ -80,15 +78,6 @@ def compute_fg_mask(gt_boxes2d, shape, downsample_factor=1, device=torch.device(
     fg_mask = torch.zeros(shape, dtype=torch.bool, device=device)
     # print(f'fg_mask: {fg_mask.shape}')
 
-    # # Set box corners
-    # gt_boxes2d /= downsample_factor
-    # gt_boxes2d[:, :2] = torch.floor(gt_boxes2d[:, :2])
-    # gt_boxes2d[:, 2:] = torch.ceil(gt_boxes2d[:, 2:])
-    # gt_boxes2d = gt_boxes2d.long()
-
-    # Set all values within each box to True
-    # gt_boxes2d = gt_boxes2d.split(num_gt_per_img, dim=0)
-
     B, N = len(gt_boxes2d), len(gt_boxes2d[0])
     # iterate batch size
     for b in range(B):
@@ -98,7 +87,6 @@ def compute_fg_mask(gt_boxes2d, shape, downsample_factor=1, device=torch.device(
             for i in range(gt_boxes2d[b][n].shape[0]):
                 # x, y, w, h = bbox
                 # depth_map[y:y + h, x:x + w] = depth
-                # print(f'gt_boxes2d: {gt_boxes2d[b][n][i]}')
                 x, y, w, h = gt_boxes2d[b][n][i]
                 fg_mask[b * N + n, y:y + h, x:x + w] = True
 

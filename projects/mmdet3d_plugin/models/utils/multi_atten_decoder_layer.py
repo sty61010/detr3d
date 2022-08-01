@@ -186,7 +186,7 @@ class MultiAttentionDecoderLayer(BaseModule):
             self_attn_args (Dict): Additional arguments passed to the self-attention module.
             cross_attn_args (Dict): Additional arguments passed to the cross-attention module.
             depth_pos_embed (Tensor): depth embedding from gt_depth_maps or depth_predictor
-                shape `depth_pos_embed: [N*H*W, B, C]` 
+                shape `depth_pos_embed: [N*H*W, B, C]`
             view_features (Tensor): features from multi-view image through backbone.
                 shape `view_features: [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C]`
 `
@@ -261,11 +261,11 @@ class MultiAttentionDecoderLayer(BaseModule):
 
             elif layer == 'cross_depth_attn':
                 # depth_pos_embed: [N*H*W, B, C]
-                key = value = depth_pos_embed
+                depth_key = depth_value = depth_pos_embed
                 query = self.attentions[attn_index](
                     query,
-                    key,
-                    value,
+                    depth_key,
+                    depth_value,
                     identity if self.pre_norm else None,
                     query_pos=query_pos,
                     key_pos=key_pos,
