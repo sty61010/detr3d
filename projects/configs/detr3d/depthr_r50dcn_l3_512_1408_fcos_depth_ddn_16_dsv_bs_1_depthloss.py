@@ -190,6 +190,8 @@ model = dict(
             downsample_factor=depth_maps_down_scale,
             loss_weight=1.0,
         ),
+        loss_depth=True,
+
     ),
 
     # model training and testing settings

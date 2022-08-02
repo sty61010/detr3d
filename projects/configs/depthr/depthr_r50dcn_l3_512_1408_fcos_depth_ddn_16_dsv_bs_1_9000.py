@@ -32,6 +32,7 @@ num_levels = 3
 # num_levels = 4
 # grid_size=[2.048, 2.048, 8]
 grid_size = [1.024, 1.024, 8]
+depth_maps_down_scale = 16
 
 model = dict(
     type='Depthr3D',
@@ -77,19 +78,18 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
-        with_gt_bbox_3d=True,
 
-        depth_gt_encoder=dict(
-            type='DepthGTEncoder',
+        depth_predictor=dict(
+            type='DepthPredictor',
             num_depth_bins=80,
             depth_min=1e-3,
             depth_max=60.0,
             embed_dims=embed_dims,
             num_levels=num_levels,
-            depth_gt_encoder_down_scale=4,
+            depth_maps_down_scale=depth_maps_down_scale,
             encoder=dict(
                 type='DetrTransformerEncoder',
-                num_layers=3,
+                num_layers=1,
                 transformerlayers=dict(
                     type='BaseTransformerLayer',
                     attn_cfgs=[
@@ -119,9 +119,14 @@ model = dict(
                 num_layers=6,
                 return_intermediate=True,
                 transformerlayers=dict(
-                    # type='BaseTransformerLayer',
                     type='MultiAttentionDecoderLayer',
                     attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1,
+                        ),
 
                         dict(
                             type='MultiheadAttention',
@@ -129,6 +134,7 @@ model = dict(
                             num_heads=8,
                             dropout=0.1,
                         ),
+
                         dict(
                             type='DeformableCrossAttention',
                             attn_cfg=dict(
@@ -141,19 +147,13 @@ model = dict(
                             embed_dims=embed_dims
                         ),
 
-                        dict(
-                            type='MultiheadAttention',
-                            embed_dims=embed_dims,
-                            num_heads=8,
-                            dropout=0.1,
-                        ),
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
+                        'cross_depth_attn', 'norm',
                         'self_attn', 'norm',
                         'cross_view_attn', 'norm',
-                        'cross_depth_attn', 'norm',
                         'ffn', 'norm',
                     )
                 )
@@ -171,7 +171,7 @@ model = dict(
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=2.0
+            loss_weight=2.0,
         ),
         loss_bbox=dict(
             type='L1Loss',
@@ -180,8 +180,18 @@ model = dict(
         loss_iou=dict(
             type='GIoULoss',
             loss_weight=0.0,
-        )
+        ),
+        loss_ddn=dict(
+            type='DDNLoss',
+            alpha=0.25,
+            gamma=2.0,
+            fg_weight=13,
+            bg_weight=1,
+            downsample_factor=depth_maps_down_scale,
+            loss_weight=1.0,
+        ),
     ),
+
     # model training and testing settings
     train_cfg=dict(pts=dict(
         grid_size=[512, 512, 1],
@@ -298,7 +308,7 @@ test_pipeline = [
         ])
 ]
 
-data_length = 6000
+data_length = 9000
 data = dict(
     samples_per_gpu=1,
     workers_per_gpu=4,
@@ -329,7 +339,7 @@ data = dict(
         type=dataset_type,
         pipeline=test_pipeline,
         classes=class_names,
-        modality=input_modality)
+        modality=input_modality),
 )
 
 optimizer = dict(
@@ -340,7 +350,9 @@ optimizer = dict(
             'img_backbone': dict(lr_mult=0.1),
         }),
     weight_decay=0.01)
+
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',

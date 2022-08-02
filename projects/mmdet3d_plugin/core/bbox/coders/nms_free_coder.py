@@ -43,7 +43,7 @@ class NMSFreeCoder(BaseBBoxCoder):
                 cls_out_channels should includes background.
             bbox_preds (Tensor): Outputs from the regression \
                 head with normalized coordinate format (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy). \
-                Shape [num_query, 9].
+                Shape [num_query, 10].
         Returns:
             list[dict]: Decoded boxes.
         """

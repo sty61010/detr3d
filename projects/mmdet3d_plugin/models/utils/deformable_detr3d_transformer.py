@@ -311,6 +311,7 @@ class DeformableDetr3DTransformer(BaseModule):
         # depth
         if depth_pos_embed is not None:
             # print(f'depth_pos_embed: {depth_pos_embed.shape}')
+            # defaut 1/32 embed size
             # depth_pos_embed: [B, N, C, H, W] -> [B, C, N, H, W]
             depth_pos_embed = depth_pos_embed.permute(0, 2, 1, 3, 4)
             # depth_pos_embed: [B, C, N, H, W] -> [B, C, N*H*W] -> [N*H*W, B, C]

@@ -139,7 +139,7 @@ class DepthPredictor(nn.Module):
         # depth embeddings with depth positional encodings
         BN, C, H, W = src.shape
         if self.depth_maps_down_scale != 32:
-            src = F.interpolate(src, scale_factor=1 / (32 / self.depth_maps_down_scale))
+            src = F.interpolate(src, scale_factor=1 / (32 / self.depth_maps_down_scale), mode='area')
             depth_pos_embed_ip = F.interpolate(depth_pos_embed_ip, scale_factor=1 / (32 / self.depth_maps_down_scale))
 
             BN, C, H_ds, W_ds = src.shape

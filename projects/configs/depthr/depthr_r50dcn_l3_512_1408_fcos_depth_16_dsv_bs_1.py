@@ -134,7 +134,7 @@ model = dict(
                             num_heads=8,
                             dropout=0.1,
                         ),
-                        
+
                         dict(
                             type='DeformableCrossAttention',
                             attn_cfg=dict(
@@ -181,15 +181,7 @@ model = dict(
             type='GIoULoss',
             loss_weight=0.0,
         ),
-        loss_ddn=dict(
-            type='DDNLoss',
-            alpha=0.25,
-            gamma=2.0,
-            fg_weight=13,
-            bg_weight=1,
-            downsample_factor=depth_maps_down_scale,
-            loss_weight=1.0,
-        ),
+
     ),
 
     # model training and testing settings
@@ -308,7 +300,7 @@ test_pipeline = [
         ])
 ]
 
-data_length = 6000
+data_length = 9000
 data = dict(
     samples_per_gpu=1,
     workers_per_gpu=4,
