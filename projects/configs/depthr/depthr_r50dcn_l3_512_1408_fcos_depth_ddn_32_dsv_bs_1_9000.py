@@ -367,3 +367,5 @@ find_unused_parameters = True
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 load_from = 'ckpts/fcos3d.pth'
+
+# 3 gpus bs=1

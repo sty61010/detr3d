@@ -61,7 +61,7 @@ model = dict(
     #     # start_level=1,
     #     start_level=0,
     #     add_extra_convs='on_output',
-    #     num_outs=num_levels,
+    #     num_outs=num_levels,s
     #     relu_before_extra_convs=True,
     # ),
     img_neck=dict(
@@ -338,3 +338,27 @@ find_unused_parameters = True
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 load_from = 'ckpts/fcos3d.pth'
+
+# 3 gpus bs=1
+# mAP: 0.1344
+# mATE: 1.0459
+# mASE: 0.7118
+# mAOE: 1.5453
+# mAVE: 1.2283
+# mAAE: 0.3295
+# NDS: 0.1631
+# Eval time: 182.4s
+
+# Per-class results:
+# Object Class    AP      ATE     ASE     AOE     AVE     AAE
+# car     0.221   1.024   0.750   1.591   1.618   0.334
+# truck   0.070   1.047   0.794   1.655   1.355   0.378
+# bus     0.095   1.113   0.850   1.600   3.153   0.585
+# trailer 0.001   1.291   0.834   1.607   0.842   0.201
+# construction_vehicle    0.006   1.139   0.712   1.492   0.148   0.437
+# pedestrian      0.214   0.958   0.347   1.523   0.746   0.309
+# motorcycle      0.119   0.972   0.796   1.536   1.519   0.359
+# bicycle 0.122   1.000   0.807   1.639   0.445   0.034
+# traffic_cone    0.284   0.936   0.346   nan     nan     nan
+# barrier 0.213   0.979   0.882   1.265   nan     nan
+# 2022-08-05 23:36:53,043 - mmdet - INFO - Exp name: depthr_r50dcn_l3_512_1408_fcos_gtdepth_16_dsv_bs_1_9000.py
