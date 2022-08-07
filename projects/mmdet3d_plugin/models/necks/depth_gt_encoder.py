@@ -131,7 +131,7 @@ class DepthGTEncoder(nn.Module):
             gt_depth_embs = layer(gt_depth_embs)
 
         # Down Scale from depth_gt_encoder_down_scale
-        depth_probs = F.interpolate(depth_probs, scale_factor=1 / self.depth_gt_encoder_down_scale)
+        depth_probs = F.interpolate(depth_probs, scale_factor=1 / self.depth_gt_encoder_down_scale, mode='area')
         weighted_depth = (depth_probs * self.depth_bin_values.reshape(1, -1, 1, 1)).sum(dim=1)
 
         # depth embeddings with depth positional encodings

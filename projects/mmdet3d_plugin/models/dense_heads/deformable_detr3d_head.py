@@ -36,6 +36,11 @@ class DeformableDetr3DHead(DETRHead):
             deoth_gt_encoder, which use convolutional layer to suppress gt_depth_maps
             to gt_depth_embedding.
             `Optional[ConfigDict]`
+        loss_ddn (obj:`ConfigDict`): ConfigDict is used for building
+            loss_ddn, which use for the supervision of predicted depth maps
+            `Optional[ConfigDict]`
+        loss_depth (bool): whether to generate depth_ave from sampling predicted depth maps.
+            Default to False.
     """
 
     def __init__(self,
@@ -691,6 +696,8 @@ class DeformableDetr3DHead(DETRHead):
 
             gt_labels_list (list[Tensor]): Ground truth class indices for each
                 image with shape (num_gts, ).
+
+            img_metas: A list of dict containing the `lidar2img` tensor.
 
             preds_dicts:
                 all_cls_scores (Tensor): Classification score of all
