@@ -369,3 +369,25 @@ runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 load_from = 'ckpts/fcos3d.pth'
 
 # 3 gpus bs=1
+# mAP: 0.1242
+# mATE: 1.0485
+# mASE: 0.7126
+# mAOE: 1.5685
+# mAVE: 1.2620
+# mAAE: 0.3301
+# NDS: 0.1579
+# Eval time: 183.4s
+
+# Per-class results:
+# Object Class    AP      ATE     ASE     AOE     AVE     AAE
+# car     0.213   1.017   0.751   1.585   1.641   0.344
+# truck   0.054   1.118   0.797   1.658   1.489   0.388
+# bus     0.080   1.083   0.853   1.582   3.050   0.492
+# trailer 0.001   1.252   0.841   1.699   0.908   0.229
+# construction_vehicle    0.006   1.119   0.714   1.395   0.156   0.480
+# pedestrian      0.208   0.958   0.347   1.568   0.776   0.344
+# motorcycle      0.102   1.024   0.794   1.596   1.559   0.302
+# bicycle 0.101   0.961   0.805   1.764   0.518   0.062
+# traffic_cone    0.276   0.963   0.341   nan     nan     nan
+# barrier 0.202   0.990   0.883   1.270   nan     nan
+# 2022-08-08 16:15:04,402 - mmdet - INFO - Exp name: depthr_r50dcn_l3_512_1408_fcos_depth_ddn_32_dsv_bs_1_9000.py
