@@ -77,7 +77,37 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
-        with_gt_bbox_3d=False,
+        with_gt_bbox_3d=True,
+
+        depth_gt_encoder=dict(
+            type='DepthGTEncoder',
+            num_depth_bins=80,
+            depth_min=1e-3,
+            depth_max=60.0,
+            embed_dims=embed_dims,
+            num_levels=num_levels,
+            depth_gt_encoder_down_scale=4,
+            encoder=dict(
+                type='DetrTransformerEncoder',
+                num_layers=3,
+                transformerlayers=dict(
+                    type='BaseTransformerLayer',
+                    attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1)
+                    ],
+                    feedforward_channels=256,
+                    ffn_dropout=0.1,
+                    operation_order=(
+                        'self_attn', 'norm',
+                        'ffn', 'norm',
+                    )
+                )
+            ),
+        ),
 
         transformer=dict(
             type='DeformableDetr3DTransformer',
@@ -111,19 +141,19 @@ model = dict(
                             embed_dims=embed_dims
                         ),
 
-                        # dict(
-                        #     type='MultiheadAttention',
-                        #     embed_dims=embed_dims,
-                        #     num_heads=8,
-                        #     dropout=0.1,
-                        # ),
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1,
+                        ),
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
                         'self_attn', 'norm',
                         'cross_view_attn', 'norm',
-                        # 'cross_depth_attn', 'norm',
+                        'cross_depth_attn', 'norm',
                         'ffn', 'norm',
                     )
                 )
@@ -141,9 +171,17 @@ model = dict(
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=2.0),
-        loss_bbox=dict(type='L1Loss', loss_weight=0.25),
-        loss_iou=dict(type='GIoULoss', loss_weight=0.0)),
+            loss_weight=2.0
+        ),
+        loss_bbox=dict(
+            type='L1Loss',
+            loss_weight=0.25,
+        ),
+        loss_iou=dict(
+            type='GIoULoss',
+            loss_weight=0.0,
+        )
+    ),
     # model training and testing settings
     train_cfg=dict(pts=dict(
         grid_size=[512, 512, 1],
@@ -260,7 +298,7 @@ test_pipeline = [
         ])
 ]
 
-data_length = 6000
+data_length = 9000
 data = dict(
     samples_per_gpu=1,
     workers_per_gpu=4,

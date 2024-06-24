@@ -32,6 +32,7 @@ num_levels = 3
 # num_levels = 4
 # grid_size=[2.048, 2.048, 8]
 grid_size = [1.024, 1.024, 8]
+depth_maps_down_scale = 16
 
 model = dict(
     type='Depthr3D',
@@ -77,18 +78,18 @@ model = dict(
         sync_cls_avg_factor=True,
         with_box_refine=True,
         as_two_stage=False,
-        with_gt_bbox_3d=True,
 
-        depth_gt_encoder=dict(
-            type='DepthGTEncoder',
+        depth_predictor=dict(
+            type='DepthPredictor',
             num_depth_bins=80,
             depth_min=1e-3,
             depth_max=60.0,
             embed_dims=embed_dims,
             num_levels=num_levels,
+            depth_maps_down_scale=depth_maps_down_scale,
             encoder=dict(
                 type='DetrTransformerEncoder',
-                num_layers=3,
+                num_layers=1,
                 transformerlayers=dict(
                     type='BaseTransformerLayer',
                     attn_cfgs=[
@@ -118,9 +119,14 @@ model = dict(
                 num_layers=6,
                 return_intermediate=True,
                 transformerlayers=dict(
-                    # type='BaseTransformerLayer',
                     type='MultiAttentionDecoderLayer',
                     attn_cfgs=[
+                        dict(
+                            type='MultiheadAttention',
+                            embed_dims=embed_dims,
+                            num_heads=8,
+                            dropout=0.1,
+                        ),
 
                         dict(
                             type='MultiheadAttention',
@@ -128,6 +134,7 @@ model = dict(
                             num_heads=8,
                             dropout=0.1,
                         ),
+
                         dict(
                             type='DeformableCrossAttention',
                             attn_cfg=dict(
@@ -139,19 +146,14 @@ model = dict(
                             num_points=1,
                             embed_dims=embed_dims
                         ),
-                        dict(
-                            type='MultiheadAttention',
-                            embed_dims=embed_dims,
-                            num_heads=8,
-                            dropout=0.1,
-                        ),
+
                     ],
                     feedforward_channels=512,
                     ffn_dropout=0.1,
                     operation_order=(
+                        'cross_depth_attn', 'norm',
                         'self_attn', 'norm',
                         'cross_view_attn', 'norm',
-                        'cross_depth_attn', 'norm',
                         'ffn', 'norm',
                     )
                 )
@@ -169,9 +171,19 @@ model = dict(
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
-            loss_weight=2.0),
-        loss_bbox=dict(type='L1Loss', loss_weight=0.25),
-        loss_iou=dict(type='GIoULoss', loss_weight=0.0)),
+            loss_weight=2.0,
+        ),
+        loss_bbox=dict(
+            type='L1Loss',
+            loss_weight=0.25,
+        ),
+        loss_iou=dict(
+            type='GIoULoss',
+            loss_weight=0.0,
+        ),
+
+    ),
+
     # model training and testing settings
     train_cfg=dict(pts=dict(
         grid_size=[512, 512, 1],
@@ -288,7 +300,7 @@ test_pipeline = [
         ])
 ]
 
-data_length = 6000
+data_length = 9000
 data = dict(
     samples_per_gpu=1,
     workers_per_gpu=4,
@@ -319,7 +331,7 @@ data = dict(
         type=dataset_type,
         pipeline=test_pipeline,
         classes=class_names,
-        modality=input_modality)
+        modality=input_modality),
 )
 
 optimizer = dict(
@@ -330,7 +342,9 @@ optimizer = dict(
             'img_backbone': dict(lr_mult=0.1),
         }),
     weight_decay=0.01)
+
 optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+
 # learning policy
 lr_config = dict(
     policy='CosineAnnealing',
@@ -345,3 +359,28 @@ find_unused_parameters = True
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 load_from = 'ckpts/fcos3d.pth'
+
+# 3 gpus bs=1
+
+# mAP: 0.1275
+# mATE: 1.0383
+# mASE: 0.7138
+# mAOE: 1.5511
+# mAVE: 1.2090
+# mAAE: 0.3114
+# NDS: 0.1612
+# Eval time: 177.3s
+
+# Per-class results:
+# Object Class    AP      ATE     ASE     AOE     AVE     AAE
+# car     0.207   1.035   0.750   1.573   1.568   0.313
+# truck   0.053   1.099   0.795   1.643   1.426   0.370
+# bus     0.079   1.094   0.849   1.648   2.822   0.457
+# trailer 0.001   1.212   0.844   1.652   0.890   0.261
+# construction_vehicle    0.005   1.218   0.714   1.500   0.143   0.433
+# pedestrian      0.217   0.949   0.339   1.543   0.784   0.331
+# motorcycle      0.114   0.988   0.796   1.555   1.474   0.285
+# bicycle 0.108   0.883   0.806   1.589   0.565   0.041
+# traffic_cone    0.295   0.908   0.363   nan     nan     nan
+# barrier 0.195   0.996   0.883   1.256   nan     nan
+# 2022-08-04 09: 22: 39, 136 - mmdet - INFO - Exp name: depthr_r50dcn_l3_512_1408_fcos_depth_16_dsv_bs_1.py

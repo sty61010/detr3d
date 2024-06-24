@@ -25,8 +25,9 @@ class DepthPredictor(nn.Module):
                  depth_min=1e-3,
                  depth_max=60.0,
                  embed_dims=256,
-                 encoder=None,
                  num_levels=4,
+                 encoder=None,
+                 depth_maps_down_scale=32,
                  ):
         """
         Initialize depth predictor and depth encoder
@@ -57,13 +58,24 @@ class DepthPredictor(nn.Module):
             nn.Conv2d(d_model, d_model, kernel_size=(1, 1)),
             nn.GroupNorm(32, d_model))
 
-        self.depth_head = nn.Sequential(
-            nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
-            nn.GroupNorm(32, num_channels=d_model),
-            nn.ReLU(),
-            nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
-            nn.GroupNorm(32, num_channels=d_model),
-            nn.ReLU())
+        self.depth_maps_down_scale = depth_maps_down_scale
+        if depth_maps_down_scale == 32:
+            self.depth_head = nn.Sequential(
+                nn.Conv2d(d_model, d_model, kernel_size=(3, 3), stride=(2, 2), padding=1),
+                nn.GroupNorm(32, num_channels=d_model),
+                nn.ReLU(),
+                nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
+                nn.GroupNorm(32, num_channels=d_model),
+                nn.ReLU())
+
+        elif depth_maps_down_scale == 16:
+            self.depth_head = nn.Sequential(
+                nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
+                nn.GroupNorm(32, num_channels=d_model),
+                nn.ReLU(),
+                nn.Conv2d(d_model, d_model, kernel_size=(3, 3), padding=1),
+                nn.GroupNorm(32, num_channels=d_model),
+                nn.ReLU())
 
         self.depth_classifier = nn.Conv2d(d_model, depth_num_bins + 1, kernel_size=(1, 1))
 
@@ -113,6 +125,7 @@ class DepthPredictor(nn.Module):
         src_16 = self.proj(flatten_feats[1])
         src_32 = self.upsample(F.interpolate(flatten_feats[2], size=src_16.shape[-2:]))
         src_8 = self.downsample(flatten_feats[0])
+        # default down sample 32
         src = (src_8 + src_16 + src_32) / 3
 
         src = self.depth_head(src)
@@ -121,33 +134,50 @@ class DepthPredictor(nn.Module):
         depth_probs = F.softmax(depth_logits, dim=1)
 
         weighted_depth = (depth_probs * self.depth_bin_values.reshape(1, -1, 1, 1)).sum(dim=1)
-
-        # print(f'src: {src.shape}')
+        depth_pos_embed_ip = self.interpolate_depth_embed(weighted_depth)
 
         # depth embeddings with depth positional encodings
         BN, C, H, W = src.shape
+        if self.depth_maps_down_scale != 32:
+            src = F.interpolate(src, scale_factor=1 / (32 / self.depth_maps_down_scale), mode='area')
+            depth_pos_embed_ip = F.interpolate(depth_pos_embed_ip, scale_factor=1 / (32 / self.depth_maps_down_scale))
+
+            BN, C, H_ds, W_ds = src.shape
+            assert H_ds == depth_pos_embed_ip.shape[-2] and W_ds == depth_pos_embed_ip.shape[-1]
+
         src = src.flatten(2).permute(2, 0, 1)
         # mask = mask.flatten(1)
         # pos = pos.flatten(2).permute(2, 0, 1)
 
         depth_embed = self.depth_encoder(src, mask, pos)
-        depth_embed = depth_embed.permute(1, 2, 0).reshape(BN, C, H, W)
+        if self.depth_maps_down_scale != 32:
+            depth_embed = depth_embed.permute(1, 2, 0).reshape(BN, C, H_ds, W_ds)
+        else:
+            depth_embed = depth_embed.permute(1, 2, 0).reshape(BN, C, H, W)
 
-        depth_pos_embed_ip = self.interpolate_depth_embed(weighted_depth)
         depth_embed = depth_embed + depth_pos_embed_ip
 
-        # # depth_logits: [B, N, D, H, W]
+        # depth_maps_down_scale for cross_depth_atten
+        depth_embed_ds = depth_embed
+        # if self.depth_maps_down_scale != 32:
+        #     depth_embed_ds = F.interpolate(depth_embed, scale_factor=1 / (32 / self.depth_maps_down_scale))
+        BN, C, H_ds, W_ds = depth_embed_ds.shape
+        # depth_embed_ds: [B, N, C, H_ds, W_ds]
+        depth_embed_ds = depth_embed_ds.reshape(B, N, -1, H_ds, W_ds)
+        # print(f'depth_embed_ds: {depth_embed_ds.shape}')
+
+        # depth_logits: [B, N, D, H, W]
         depth_logits = depth_logits.reshape(B, N, -1, H, W)
-        # # depth_embed: [B, N, C, H, W]
-        depth_embed = depth_embed.reshape(B, N, -1, H, W)
-        # # weighted_depth: [B, N, H, W]
+        # depth_embed: [B, N, C, H, W]
+        # depth_embed = depth_embed.reshape(B, N, -1, H, W)
+        # weighted_depth: [B, N, H, W]
         weighted_depth = weighted_depth.reshape(B, N, H, W)
 
         # print(f'depth_logits: {depth_logits.shape}')
         # print(f'depth_embed: {depth_embed.shape}')
         # print(f'weighted_depth: {weighted_depth.shape}')
 
-        return depth_logits, depth_embed, weighted_depth
+        return depth_logits, depth_embed_ds, weighted_depth
 
     def interpolate_depth_embed(self, depth):
         depth = depth.clamp(min=0, max=self.depth_max)

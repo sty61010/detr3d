@@ -155,6 +155,7 @@ class MultiAttentionDecoderLayer(BaseModule):
                 self_attn_args=dict(),
                 cross_attn_args=dict(),
                 depth_pos_embed: Optional[Tensor] = None,
+                view_features: Optional[Tensor] = None,
                 **kwargs):
         """Forward function for `TransformerDecoderLayer`.
 
@@ -184,6 +185,11 @@ class MultiAttentionDecoderLayer(BaseModule):
                 shape [bs, num_keys]. Default: None.
             self_attn_args (Dict): Additional arguments passed to the self-attention module.
             cross_attn_args (Dict): Additional arguments passed to the cross-attention module.
+            depth_pos_embed (Tensor): depth embedding from gt_depth_maps or depth_predictor
+                shape `depth_pos_embed: [N*H*W, B, C]`
+            view_features (Tensor): features from multi-view image through backbone.
+                shape `view_features: [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C]`
+`
         Returns:
             Tensor: forwarded results with shape [num_queries, bs, embed_dims].
         """
@@ -240,8 +246,9 @@ class MultiAttentionDecoderLayer(BaseModule):
             elif layer == 'cross_view_attn':
                 query = self.attentions[attn_index](
                     query,
-                    key,
-                    value,
+                    None,
+                    # view_features: [num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C]
+                    view_features,
                     identity if self.pre_norm else None,
                     query_pos=query_pos,
                     key_pos=key_pos,
@@ -253,11 +260,12 @@ class MultiAttentionDecoderLayer(BaseModule):
                 identity = query
 
             elif layer == 'cross_depth_attn':
-                key = value = depth_pos_embed
+                # depth_pos_embed: [N*H*W, B, C]
+                depth_key = depth_value = depth_pos_embed
                 query = self.attentions[attn_index](
                     query,
-                    key,
-                    value,
+                    depth_key,
+                    depth_value,
                     identity if self.pre_norm else None,
                     query_pos=query_pos,
                     key_pos=key_pos,

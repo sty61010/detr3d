@@ -91,12 +91,12 @@ class Detr3D(MVXTwoStageDetector):
         Returns:
             dict: Losses of each branch.
         """
-        # outs = self.pts_bbox_head(pts_feats, img_metas)
-        outs = self.pts_bbox_head(
-            pts_feats,
-            img_metas,
-            gt_bboxes_3d
-        )
+        outs = self.pts_bbox_head(pts_feats, img_metas)
+        # outs = self.pts_bbox_head(
+        #     pts_feats,
+        #     img_metas,
+        #     gt_bboxes_3d
+        # )
         loss_inputs = [gt_bboxes_3d, gt_labels_3d, outs]
         losses = self.pts_bbox_head.loss(*loss_inputs)
         return losses
@@ -161,6 +161,10 @@ class Detr3D(MVXTwoStageDetector):
             img_metas,
             gt_bboxes_ignore,
         )
+        # losses_pts = self.forward_pts_train(
+        #     img_feats,
+        #     img_metas,
+        # )
         losses.update(losses_pts)
         return losses
 

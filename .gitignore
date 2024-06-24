@@ -115,6 +115,7 @@ data
 *.log.json
 work_dirs/
 exps/
+ckpts/
 *~
 mmdet3d/.mim
 mmdetection3d/

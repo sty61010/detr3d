@@ -10,7 +10,7 @@ from mmdet3d.core.bbox.coders import build_bbox_coder
 from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
 from mmdet3d.models.builder import build_neck
 from mmdet.core import multi_apply, reduce_mean
-from mmdet.models import HEADS
+from mmdet.models import HEADS, build_loss
 from mmdet.models.dense_heads import DETRHead
 from mmdet.models.utils.transformer import inverse_sigmoid
 
@@ -28,7 +28,6 @@ class DeformableDetr3DHead(DETRHead):
             the outputs of encoder.
         transformer (obj:`ConfigDict`): ConfigDict is used for building
             the Encoder and Decoder.
-
         depth_predictor (obj:`ConfigDict`): ConfigDict is used for building
             depth_predictor, which use feature map to predict weight depth
             distribution and depth embedding.
@@ -37,9 +36,11 @@ class DeformableDetr3DHead(DETRHead):
             deoth_gt_encoder, which use convolutional layer to suppress gt_depth_maps
             to gt_depth_embedding.
             `Optional[ConfigDict]`
-        with_gt_bbox_3d (bool): Whether to get gt_bbox_3d in data pipline,
-            default set to False.
-            `Optional[bool]`
+        loss_ddn (obj:`ConfigDict`): ConfigDict is used for building
+            loss_ddn, which use for the supervision of predicted depth maps
+            `Optional[ConfigDict]`
+        loss_depth (bool): whether to generate depth_ave from sampling predicted depth maps.
+            Default to False.
     """
 
     def __init__(self,
@@ -52,7 +53,8 @@ class DeformableDetr3DHead(DETRHead):
                  code_weights=None,
                  depth_predictor=None,
                  depth_gt_encoder=None,
-                 with_gt_bbox_3d=True,
+                 loss_ddn=None,
+                 loss_depth=False,
                  ** kwargs):
         self.with_box_refine = with_box_refine
         self.as_two_stage = as_two_stage
@@ -91,7 +93,9 @@ class DeformableDetr3DHead(DETRHead):
         self.depth_bin_cfg = None
         self.depth_predictor = None
         self.depth_gt_encoder = None
-
+        self.loss_ddn = None
+        self.depth_maps_down_scale = 8
+        self.gt_depth_maps_down_scale = 8
         if depth_predictor is not None:
             self.depth_predictor = build_neck(depth_predictor)
             self.depth_bin_cfg = dict(
@@ -109,7 +113,13 @@ class DeformableDetr3DHead(DETRHead):
                 depth_max=depth_gt_encoder.get("depth_max"),
                 num_depth_bins=depth_gt_encoder.get("num_depth_bins"),
             )
-        self.with_gt_bbox_3d = with_gt_bbox_3d
+            self.gt_depth_maps_down_scale = depth_gt_encoder.get("gt_depth_maps_down_scale")
+
+        if loss_ddn is not None:
+            self.loss_ddn = build_loss(loss_ddn)
+            self.depth_maps_down_scale = loss_ddn.get("downsample_factor")
+
+        self.loss_depth = loss_depth
 
     def _init_layers(self):
         """Initialize classification branch and regression branch of head."""
@@ -173,12 +183,13 @@ class DeformableDetr3DHead(DETRHead):
             gt_bboxes_3d: The ground truth list of `LiDARInstance3DBoxes`.
 
         Returns:
-            all_cls_scores (Tensor): Outputs from the classification head, \
-                shape [nb_dec, bs, num_query, cls_out_channels]. Note \
+            all_cls_scores (Tensor): Outputs from the classification head,
+                shape [nb_dec, bs, num_query, cls_out_channels]. Note
                 cls_out_channels should includes background.
-            all_bbox_preds (Tensor): Sigmoid outputs from the regression \
-                head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
-                Shape [nb_dec, bs, num_query, 9].
+            all_bbox_preds(torch.Tensor): Sigmoid outputs from the regression
+                head with normalized coordinate format
+                (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy).
+                `[num_layer, B, num_queries, 10]`
         """
 
         # Modified for deformable detr
@@ -227,40 +238,39 @@ class DeformableDetr3DHead(DETRHead):
 
         # Operations for depth embedding
         depth_pos_embed = None
-        gt_depth_maps = None
-
-        if gt_bboxes_3d is not None and self.with_gt_bbox_3d is True:
-            # gt_depth_maps with depth_gt_encoder: [B, N, H, W, num_depth_bins], dtype: torch.float32
-            # gt_depth_maps with normal depth encoder: [B, N, H, W], dtype: torch.long
-            gt_depth_maps, gt_bboxes_2d = self.get_depth_map_and_gt_bboxes_2d(
-                gt_bboxes_list=gt_bboxes_3d,
-                img_metas=img_metas,
-                # TODO: `target` should be true after removing depth_gt_encoder
-                target=(self.depth_gt_encoder is None),
-                device=mlvl_feats[0].device,
-                depth_maps_down_scale=8,
-            )
-            gt_depth_maps = gt_depth_maps.to(mlvl_feats[0].device)
-            # print(f'gt_depth_maps: {gt_depth_maps.shape}')
-
+        pred_depth_map_logits = None
+        weighted_depth = None
         if self.depth_predictor is not None:
             # pred_depth_map_logits: [B, N, D, H, W]
             # depth_pos_embed: [B, N, C, H, W]
             # weighted_depth: [B, N, H, W]
             pred_depth_map_logits, depth_pos_embed, weighted_depth = self.depth_predictor(
-                mlvl_feats,
+                mlvl_feats=mlvl_feats,
+                mask=None,
+                pos=None,
             )
-            # print(f'depth_maps_shape: {pred_depth_map_logits.shape[:]}')
+            # print(f'pred_depth_map_logits: {pred_depth_map_logits.shape[:]}')
 
         if self.depth_gt_encoder is not None:
-            if gt_depth_maps is not None:
-                # print(f'gt_depth_maps: {gt_depth_maps.shape[:]}')
-                pred_depth_map_logits, depth_pos_embed, weighted_depth = self.depth_gt_encoder(
-                    mlvl_feats=mlvl_feats,
-                    mask=None,
-                    pos=None,
-                    gt_depth_maps=gt_depth_maps,
-                )
+            assert gt_bboxes_3d is not None
+            # gt_depth_maps with depth_gt_encoder: [B, N, H, W, num_depth_bins], dtype: torch.float32
+            gt_depth_maps, gt_bboxes_2d = self.get_depth_map_and_gt_bboxes_2d(
+                gt_bboxes_list=gt_bboxes_3d,
+                img_metas=img_metas,
+                target=False,
+                device=mlvl_feats[0].device,
+                depth_maps_down_scale=self.gt_depth_maps_down_scale,
+            )
+            gt_depth_maps = gt_depth_maps.to(mlvl_feats[0].device)
+            # print(f'gt_depth_maps: {gt_depth_maps.shape}')
+            # We do not need pred_depth_map_logits and weighted_depth to compute
+            # loss_ddn when using gt_depth_maps
+            _, depth_pos_embed, _ = self.depth_gt_encoder(
+                mlvl_feats=mlvl_feats,
+                mask=None,
+                pos=None,
+                gt_depth_maps=gt_depth_maps,
+            )
 
         # hs: [num_layers, num_query, bs, embed_dims]
         # init_reference: [bs, num_query, 3]
@@ -313,6 +323,8 @@ class DeformableDetr3DHead(DETRHead):
             'all_bbox_preds': outputs_coords,
             'enc_cls_scores': None,
             'enc_bbox_preds': None,
+            'pred_depth_map_logits': pred_depth_map_logits,
+            'weighted_depth': weighted_depth,
         }
         return outs
 
@@ -489,8 +501,10 @@ class DeformableDetr3DHead(DETRHead):
             cls_score (Tensor): Box score logits from a single decoder layer
                 for one image. Shape [num_query, cls_out_channels].
             bbox_pred (Tensor): Sigmoid outputs from a single decoder layer
-                for one image, with normalized coordinate (cx, cy, w, h) and
-                shape [num_query, 4].
+                for 6 images(single sample), Outputs from the regression head with
+                normalized coordinate format
+                (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy).
+                `[num_queries, 10]`
             gt_bboxes (Tensor): Ground truth bboxes for one image with
                 shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
             gt_labels (Tensor): Ground truth class indices for one image
@@ -546,8 +560,10 @@ class DeformableDetr3DHead(DETRHead):
                 decoder layer for each image with shape [num_query,
                 cls_out_channels].
             bbox_preds_list (list[Tensor]): Sigmoid outputs from a single
-                decoder layer for each image, with normalized coordinate
-                (cx, cy, w, h) and shape [num_query, 4].
+                decoder layer for each sample, with normalized coordinate
+                normalized coordinate format
+                (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy).
+                `[num_queries, 10]`
             gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
                 with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
             gt_labels_list (list[Tensor]): Ground truth class indices for each
@@ -594,10 +610,13 @@ class DeformableDetr3DHead(DETRHead):
         feature level.
         Args:
             cls_scores (Tensor): Box score logits from a single decoder layer
-                for all images. Shape [bs, num_query, cls_out_channels].
+                for all images.
+                Shape `[bs, num_query, cls_out_channels]`.
             bbox_preds (Tensor): Sigmoid outputs from a single decoder layer
-                for all images, with normalized coordinate (cx, cy, w, h) and
-                shape [bs, num_query, 4].
+                for all images(single sample), Outputs from the regression head with
+                normalized coordinate format
+                (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy).
+                `[B, num_queries, 10]`
             gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
                 with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
             gt_labels_list (list[Tensor]): Ground truth class indices for each
@@ -608,12 +627,22 @@ class DeformableDetr3DHead(DETRHead):
             dict[str, Tensor]: A dictionary of loss components for outputs from
                 a single decoder layer.
         """
+        # print(f'cls_scores: {(cls_scores.shape)}')
+        # print(f'bbox_preds: {(bbox_preds.shape)}')
         num_imgs = cls_scores.size(0)
+
+        # Operation to transfrom from torch.Tensor[B, num_query, 10] to
+        # list(B) of torch.Tensor[num_query, 10]
+        # list(B) of tensor cls_scores_list: [num_queries, 10]
         cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
+        # list(B) of tensor bbox_preds_list: [num_queries, 10]
         bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
+        # print(f'cls_scores_list: {(cls_scores_list[0].shape)}')
+        # print(f'bbox_preds_list: {(bbox_preds_list[0].shape)}')
         cls_reg_targets = self.get_targets(cls_scores_list, bbox_preds_list,
                                            gt_bboxes_list, gt_labels_list,
                                            gt_bboxes_ignore_list)
+
         (labels_list, label_weights_list, bbox_targets_list, bbox_weights_list,
          num_total_pos, num_total_neg) = cls_reg_targets
         labels = torch.cat(labels_list, 0)
@@ -656,23 +685,29 @@ class DeformableDetr3DHead(DETRHead):
     def loss(self,
              gt_bboxes_list,
              gt_labels_list,
+             img_metas,
              preds_dicts,
              gt_bboxes_ignore=None):
         """"Loss function.
         Args:
 
-            gt_bboxes_list (list[Tensor]): Ground truth bboxes for each image
-                with shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
+            gt_bboxes_list (list[Tensor]): The ground truth list of
+            `LiDARInstance3DBoxes`.
+
             gt_labels_list (list[Tensor]): Ground truth class indices for each
                 image with shape (num_gts, ).
+
+            img_metas: A list of dict containing the `lidar2img` tensor.
+
             preds_dicts:
                 all_cls_scores (Tensor): Classification score of all
                     decoder layers, has shape
-                    [nb_dec, bs, num_query, cls_out_channels].
-                all_bbox_preds (Tensor): Sigmoid regression
-                    outputs of all decode layers. Each is a 4D-tensor with
-                    normalized coordinate format (cx, cy, w, h) and shape
-                    [nb_dec, bs, num_query, 4].
+                    `[num_layer, bs, num_query, cls_out_channels]`.
+                all_bbox_preds(torch.Tensor): Sigmoid regression outputs
+                    of all decode layers. Outputs from the regression head with
+                    normalized coordinate format
+                    (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy).
+                    `[num_layer, B, num_queries, 10]`
                 enc_cls_scores (Tensor): Classification scores of
                     points on encode feature map , has shape
                     (N, h*w, num_classes). Only be passed when as_two_stage is
@@ -680,6 +715,11 @@ class DeformableDetr3DHead(DETRHead):
                 enc_bbox_preds (Tensor): Regression results of each points
                     on the encode feature map, has shape (N, h*w, 4). Only be
                     passed when as_two_stage is True, otherwise is None.
+                pred_depth_map_logits (Tensor): one hot encoding to represent the predict depth_maps,
+                    in depth_gt_encoder default is None, defualt downsample to 1/32
+                    `[B, N, D, H, W]`
+                weighted_depth (Tensor): weight-sum value of predicted_depth_maps or gt_depth_maps
+                    `[B, N, H, W]`
             gt_bboxes_ignore (list[Tensor], optional): Bounding boxes
                 which can be ignored for each image. Default None.
         Returns:
@@ -688,20 +728,38 @@ class DeformableDetr3DHead(DETRHead):
         assert gt_bboxes_ignore is None, \
             f'{self.__class__.__name__} only supports ' \
             f'for gt_bboxes_ignore setting to None.'
-
+        gt_bboxes_3d = gt_bboxes_list
+        # Operation from prediction
+        # all_cls_scores(torch.Tensor): [num_layer, B, num_queries, 10]
         all_cls_scores = preds_dicts['all_cls_scores']
+        # all_bbox_preds(torch.Tensor): [num_layer, B, num_queries, 10]
         all_bbox_preds = preds_dicts['all_bbox_preds']
+        # print(f'all_cls_scores: {(all_cls_scores.shape)}')
+        # print(f'all_bbox_preds: {(all_bbox_preds.shape)}')
+
         enc_cls_scores = preds_dicts['enc_cls_scores']
         enc_bbox_preds = preds_dicts['enc_bbox_preds']
 
+        if self.loss_depth:
+            all_bbox_preds = self.compute_d_ave(
+                img_metas=img_metas,
+                weighted_depth=preds_dicts['weighted_depth'],
+                all_bbox_preds=preds_dicts['all_bbox_preds'],
+            )
+
+        # Operation from GT
         num_dec_layers = len(all_cls_scores)
         device = gt_labels_list[0].device
+        # TODO: call `get_depth_map_and_gt_bboxes_2d` here and pass them into self.loss_single.
         gt_bboxes_list = [torch.cat(
             (gt_bboxes.gravity_center, gt_bboxes.tensor[:, 3:]),
             dim=1).to(device) for gt_bboxes in gt_bboxes_list]
 
+        # list(6 layer) of list(B) of tensor gt_labels_list: [num_objects,]
         all_gt_bboxes_list = [gt_bboxes_list for _ in range(num_dec_layers)]
+        # list(6 layer) of list(B) of tensor gt_labels_list: [num_objects, 9]
         all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
+
         all_gt_bboxes_ignore_list = [
             gt_bboxes_ignore for _ in range(num_dec_layers)
         ]
@@ -713,6 +771,8 @@ class DeformableDetr3DHead(DETRHead):
 
         loss_dict = dict()
         # loss of proposal generated from encode feature map.
+        # print(f'enc_cls_scores: {enc_cls_scores}')
+        # enc_cls_scores is None
         if enc_cls_scores is not None:
             binary_labels_list = [
                 torch.zeros_like(gt_labels_list[i])
@@ -735,7 +795,150 @@ class DeformableDetr3DHead(DETRHead):
             loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
             loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
             num_dec_layer += 1
+
+        # Operation for depth_map surpervised
+        if self.loss_ddn is not None:
+            # loss from pred_depth_map_logits:
+            # pred_depth_map_logits: [B, N, D+1, H, W]
+            pred_depth_map_logits = preds_dicts['pred_depth_map_logits']
+            assert pred_depth_map_logits is not None
+            # print(f'pred_depth_map_logits: {pred_depth_map_logits.shape}')
+
+            # get gt_depth_maps:
+            # gt_depth_maps with depth_gt_encoder: [B, N, H, W, num_depth_bins], dtype: torch.float32
+            # gt_depth_maps with normal depth encoder: [B, N, H, W], dtype: torch.long
+            """
+                gt_depth_maps: Thr ground truth depth maps with shape
+                    [batch, num_cameras, depth_map_H, depth_map_W] if `target` is true.
+                    Otherwise, the shape is [batch, num_cameras, depth_map_H, depth_map_W, num_depth_bins].
+                gt_bboxes_2d: A list of list of tensor containing 2D ground truth bboxes(x, y, w, h)
+                    for each sample and each camera. Each tensor has shape [N_i, 4].
+                    Below is the brief explanation of a single batch:
+                    [B, N, ....]
+                    [[gt_bboxes_tensor_camera_0, gt_bboxes_tensor_camera_1, ..., gt_bboxes_tensor_camera_n](sample 0),
+                        [gt_bboxes_tensor_camera_0, gt_bboxes_tensor_camera_1, ..., gt_bboxes_tensor_camera_n](sample 1),
+                        ...].
+            """
+
+            gt_depth_maps, gt_bboxes_2d = self.get_depth_map_and_gt_bboxes_2d(
+                gt_bboxes_list=gt_bboxes_3d,
+                img_metas=img_metas,
+                # TODO: `target` should be true after removing depth_gt_encoder
+                target=(self.depth_gt_encoder is None),
+                device=device,
+                depth_maps_down_scale=self.depth_maps_down_scale,
+            )
+            gt_depth_maps = gt_depth_maps.to(device)
+            # print(f'gt_depth_maps: {gt_depth_maps.shape}')
+
+            loss_ddn = self.loss_ddn(
+                depth_logits=pred_depth_map_logits,
+                depth_target=gt_depth_maps,
+                gt_bboxes_2d=gt_bboxes_2d,
+            )
+            loss_dict['loss_ddn'] = loss_ddn
+        # print(f'loss_dict: {loss_dict}')
         return loss_dict
+
+    def compute_d_ave(
+        self,
+        img_metas: List[Dict[str, torch.Tensor]],
+        weighted_depth: torch.Tensor,
+        all_bbox_preds: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute d_ave for loss_depth from weighted_depth and return new all_bbox_preds
+            with update cz
+
+        Args:
+            img_metas: A list of dict containing the `lidar2img` tensor.
+            weighted_depth (torch.Tensor): weight-sum value of predicted_depth_maps or gt_depth_maps
+                `[B, N, H, W]`
+            all_bbox_preds(torch.Tensor): Sigmoid regression outputs
+                of all decode layers. Outputs from the regression head with
+                normalized coordinate format
+                (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy).
+                `[num_layer, B, num_queries, 10]`
+
+        Returns:
+            all_bbox_preds_new(torch.Tensor): new all_bbox_preds
+                with update cz and normalized coordinate format
+                (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy).
+                `[num_layer, B, num_queries, 10]`
+        """
+
+        # weighted_depth: [B, N, H, W] -> [B*N, C, H, W]
+        weighted_depth = weighted_depth.flatten(0, 1).unsqueeze(1)
+        # lidar2img: [B, num_cameras, 4, 4]
+        lidar2img = all_bbox_preds.new_tensor([img_meta['lidar2img'] for img_meta in img_metas])
+        print(f'lidar2img: {lidar2img.shape}')
+
+        # outputs_centers: [num_layer, B, num_query, 3] -> [B, num_query, num_layer, 3]
+        outputs_centers = torch.cat(
+            (all_bbox_preds[..., 0:2], all_bbox_preds[..., 4:5]), dim=-1).permute(1, 2, 0, 3)
+
+        # convert to homogeneous coordinate. [batch, num_query, num_layer, 4]
+        outputs_centers = torch.cat([
+            outputs_centers,
+            outputs_centers.new_ones((*outputs_centers.shape[:-1], 1))
+        ], dim=-1)
+        # print(f'outputs_centers: {outputs_centers.shape}')
+
+        # uvd: [num_cameras, batch, num_query, num_layer, 3]
+        uvd: torch.Tensor = torch.einsum('bnij,bqlj->nbqli', lidar2img[:, :, :3], outputs_centers)
+        N, B, Q, L, _ = uvd.shape
+
+        # uv: [num_cameras, batch, num_query, num_layer, 2]
+        uv = uvd[..., :2] / (uvd[..., -1:] + 1e-8)
+        img_H, img_W, _ = img_metas[0]['img_shape'][0]
+
+        # normalize to [0, 1] -> [-1, 1]
+        uv = (uv / uv.new_tensor([img_W, img_H]).reshape(1, 1, 1, 1, 2)) * 2 - 1
+
+        # uv:[N, B, Q, L, 2] -> [B*N, Q, L, 2]
+        uv = uv.flatten(0, 1).detach()
+        # print(f'uv: {uv.shape}')
+        # d_from_weighted_depth: [num_cameras*batch, num_query, num_layer, 1]
+        d_from_weighted_depth = F.grid_sample(
+            weighted_depth,
+            uv,
+            mode='bilinear',
+            align_corners=True,
+        )
+        # d_from_weighted_depth: [num_cameras, batch, num_query, num_layer, 1]
+        d_from_weighted_depth = d_from_weighted_depth.reshape(N, B, Q, L, -1)
+
+        # d: [num_cameras, batch, num_query, num_layer, 1]
+        d = uvd[..., 2:]
+
+        # d_ave: [num_cameras, batch, num_query, num_layer, 1]
+        d_ave = (d + d_from_weighted_depth) / 2
+        print(f'd_ave: {d_ave.shape}')
+
+        # uvd_new: [num_cameras, batch, num_query, num_layer, 3]
+        uvd_new = torch.cat((uvd[..., :2], d_ave), dim=-1)
+
+        # convert to homogeneous coordinate.
+        # uvd_new: [num_cameras, batch, num_query, num_layer, 4]
+        uvd_new = torch.cat([
+            uvd_new,
+            uvd_new.new_ones((*uvd_new.shape[:-1], 1))
+        ], dim=-1)
+        print(f'uvd_new: {uvd_new.shape}')
+
+        # img2lidar: [B, num_cameras, 4, 4]
+        img2lidar = torch.linalg.inv(lidar2img)
+        print(f'img2lidar: {img2lidar.shape}')
+
+        # TODO: Please check the transformation from img2lidar for new centers
+        # and aggregate center from different camera in lidar-coordinate
+        outputs_centers_new = torch.einsum('bnij,nbqlj->bqli', img2lidar[:, :, :3], uvd_new)
+        print(f'outputs_centers_new: {outputs_centers_new.shape}')
+
+        all_bbox_preds_new = all_bbox_preds
+        all_bbox_preds_new[..., :2] = outputs_centers_new[..., :2]
+        all_bbox_preds_new[..., 4:5] = outputs_centers_new[..., :-1]
+
+        return all_bbox_preds_new
 
     @force_fp32(apply_to=('preds_dicts'))
     def get_bboxes(self, preds_dicts, img_metas, rescale=False):

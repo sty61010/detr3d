@@ -188,7 +188,7 @@ class Depthr3D(MVXTwoStageDetector):
             img_metas,
             gt_bboxes_3d,
         )
-        loss_inputs = [gt_bboxes_3d, gt_labels_3d, outs]
+        loss_inputs = [gt_bboxes_3d, gt_labels_3d, img_metas, outs]
         losses = self.pts_bbox_head.loss(*loss_inputs)
 
         return losses
@@ -210,7 +210,7 @@ class Depthr3D(MVXTwoStageDetector):
             gt_bboxes_3d (list[:obj:`BaseInstance3DBoxes`]): Ground truth
                 boxes for each sample.
             gt_labels_3d (list[torch.Tensor]): Ground truth labels for
-                boxes of each sampole
+                boxes of each sample
         Returns:
             bbox_list: dict of bboxes
         """

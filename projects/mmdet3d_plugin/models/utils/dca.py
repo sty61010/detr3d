@@ -30,7 +30,7 @@ def inverse_sigmoid(x, eps=1e-5):
 
 @ATTENTION.register_module()
 class DeformableCrossAttention(BaseModule):
-    """An DeformableCrossAttention module used in DeformableDetr3DTransformerDecoder. 
+    """An DeformableCrossAttention module used in DeformableDetr3DTransformerDecoder.
     Args:
         embed_dims (int): The embedding dimension of Attention.
             Default: 256.
@@ -160,7 +160,7 @@ class DeformableCrossAttention(BaseModule):
             key (Tensor): The key tensor with shape
                 `[num_key, B, embed_dims]`
             value (Tensor): The value tensor with shape
-                `(num_key, B, embed_dims)`. [B, N, C, H, W]
+                `[num_cameras, \sum_{i=0}^{L} H_i * W_i, B, C]`.
             residual (Tensor): The tensor used for addition, with the
                 same shape as `x`. Default None. If None, `x` will be used.
             query_pos (Tensor): The positional encoding for `query`.
